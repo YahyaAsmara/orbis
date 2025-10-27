@@ -1,0 +1,11 @@
+stages:
+  - deploy
+
+deploy_to_render:
+  stage: deploy
+  image: curlimages/curl:latest
+  script:
+    - echo "Triggering Render deploy..."
+    - curl -X POST "$RENDER_DEPLOY_HOOK"
+  only:
+    - main
