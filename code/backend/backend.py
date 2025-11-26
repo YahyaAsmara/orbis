@@ -123,7 +123,7 @@ Helper function to hash passwords for security purposes
 def hash_password(pwd):
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(pwd.encode('utf-8'), salt)
-    return hashed
+    return hashed.decode('utf-8')
 
 """
 Helper function to verify a stored password against one provided by the user
