@@ -15,11 +15,23 @@ Uses SQLAlchemy to connect to the database
 Imports create_engine as the main entry point into the DB
 Imports text to safely inject SQL code into the database
 """
+import os
 from sqlalchemy import create_engine, text
 
+
+def _build_engine():
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is not set. "
+            "Export it before running initialize_database.py"
+        )
+
+    return create_engine(database_url)
+
+
 #--Set up and connect to DB--
-DATABASE_URL = "INSERT DATABASE URL" # Placeholder for when running the file locally during database set up
-db_engine = create_engine(DATABASE_URL)
+db_engine = _build_engine()
 connection_to_db = db_engine.connect()
 #----------------------------
 
