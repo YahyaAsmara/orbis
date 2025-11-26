@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brutalist topographic color scheme - inspired by vintage map aesthetics */
+  --color-topo-cream: #f4ebe1;
+  --color-topo-brown: #3d2817;
+  --color-topo-green: #1a4d2e;
+  --color-topo-blue: #0a2f51;
+  --color-contour: #8b7355;
+  --color-water: #4a7c9e;
+  --color-highlight: #d35400;
+  --color-warn: #c0392b;
+  
+  /* Typography */
+  --font-display: 'Newsreader', serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  
+  /* Spacing */
+  --spacing-unit: 8px;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+@layer base {
+  * {
+    @apply border-topo-brown;
+  }
+  
+  body {
+    @apply bg-topo-cream text-topo-brown;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+  }
+  
+  h1 {
+    @apply text-6xl;
+  }
+  
+  h2 {
+    @apply text-4xl;
+  }
+  
+  h3 {
+    @apply text-2xl;
+  }
+}
+
+@layer components {
+  /* Brutalist button styles */
+  .btn {
+    @apply px-6 py-3 font-mono font-bold text-sm uppercase tracking-wider;
+    @apply border-4 border-topo-brown transition-all duration-100;
+    @apply hover:translate-x-1 hover:translate-y-1;
+    box-shadow: 6px 6px 0 var(--color-topo-brown);
+  }
+  
+  .btn:hover {
+    box-shadow: 3px 3px 0 var(--color-topo-brown);
+  }
+  
+  .btn:active {
+    @apply translate-x-1 translate-y-1;
+    box-shadow: 2px 2px 0 var(--color-topo-brown);
+  }
+  
+  .btn-primary {
+    @apply bg-topo-green text-topo-cream;
+  }
+  
+  .btn-secondary {
+    @apply bg-topo-cream text-topo-brown;
+  }
+  
+  .btn-accent {
+    @apply bg-highlight text-topo-cream;
+  }
+  
+  /* Input fields with topographic feel */
+  .input {
+    @apply w-full px-4 py-3 font-mono text-sm;
+    @apply bg-topo-cream border-4 border-topo-brown;
+    @apply focus:outline-none focus:border-topo-green;
+    @apply transition-colors duration-150;
+  }
+  
+  .input::placeholder {
+    @apply text-contour;
+  }
+  
+  /* Card component - map-like panels */
+  .card {
+    @apply border-4 border-topo-brown bg-topo-cream;
+    @apply relative;
+    box-shadow: 8px 8px 0 rgba(61, 40, 23, 0.15);
+  }
+  
+  /* Contour line decoration */
+  .contour-lines {
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 19px,
+      var(--color-contour) 19px,
+      var(--color-contour) 20px
+    );
+    opacity: 0.1;
+  }
+  
+  /* Grid pattern overlay */
+  .grid-pattern {
+    background-image:
+      linear-gradient(var(--color-topo-brown) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-topo-brown) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.05;
+  }
+}
+
+@layer utilities {
+  .text-display {
+    font-family: var(--font-display);
+  }
+  
+  .text-mono {
+    font-family: var(--font-mono);
+  }
+  
+  /* Animation utilities */
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+  
+  @keyframes slideIn {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* Leaflet map customization */
+.leaflet-container {
+  @apply border-4 border-topo-brown;
+  font-family: var(--font-mono) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  @apply border-2 border-topo-brown;
+  background: var(--color-topo-cream) !important;
+  border-radius: 0 !important;
+  box-shadow: 4px 4px 0 rgba(61, 40, 23, 0.2) !important;
+}
+
+.leaflet-popup-tip {
+  display: none !important;
+}
