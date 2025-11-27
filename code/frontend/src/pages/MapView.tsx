@@ -194,7 +194,7 @@ export default function MapView() {
             onClick={() => setShowRoutePanel(!showRoutePanel)}
             className="btn btn-secondary text-xs"
           >
-            {showRoutePanel ? 'Hide' : 'Plan Route'}
+            {showRoutePanel ? 'Hide Route Planner' : 'Plan Route'}
           </button>
         </div>
       </div>
@@ -285,18 +285,19 @@ export default function MapView() {
               }}
               loading={loading}
             />
-          ) : selectedLocation ? (
-            <LocationDetail
-              location={selectedLocation}
-              onRemove={() => handleRemoveLocation(selectedLocation)}
-              onClose={() => setSelectedLocation(null)}
-            />
           ) : showRoutePanel ? (
             <RoutePlanningPanel
               locations={locations}
               userId={userId}
               onPathComputed={(path) => setComputedPath(path)}
               graphSource={graphSource}
+            />
+          ) : selectedLocation ? (
+            <LocationDetail
+              location={selectedLocation}
+              onRemove={() => handleRemoveLocation(selectedLocation)}
+              onClose={() => setSelectedLocation(null)}
+              onPlanRoute={() => setShowRoutePanel(true)}
             />
           ) : (
             <LocationsList
@@ -479,10 +480,12 @@ function LocationDetail({
   location,
   onRemove,
   onClose,
+  onPlanRoute,
 }: {
   location: Location
   onRemove: () => void
   onClose: () => void
+  onPlanRoute: () => void
 }) {
   return (
     <div className="card p-6">
@@ -522,9 +525,14 @@ function LocationDetail({
         </div>
       </div>
 
-      <button onClick={onRemove} className="btn btn-accent text-xs w-full mt-6">
-        Remove Location
-      </button>
+      <div className="flex flex-col gap-3 mt-6">
+        <button onClick={onPlanRoute} className="btn btn-primary text-xs w-full">
+          Plan Route from Here
+        </button>
+        <button onClick={onRemove} className="btn btn-accent text-xs w-full">
+          Remove Location
+        </button>
+      </div>
     </div>
   )
 }
