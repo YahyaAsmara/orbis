@@ -403,7 +403,7 @@ def createAccount():
                     """
                     INSERT INTO USERS (email, username, userPassword, registrationDate, userRole)
                     VALUES (:email, :username, :pwd_hash, :reg_date, :role)
-                    RETURNING userID, userRole
+                    RETURNING userID AS "userID", userRole AS "userRole"
                     """
                 ),
                 {
@@ -460,7 +460,7 @@ def signIn():
             user_row = connection.execute(
                 text(
                     """
-                    SELECT userID, username, email, userPassword, userRole
+                    SELECT userID AS "userID", username, email, userPassword AS "userPassword", userRole AS "userRole"
                     FROM USERS
                     WHERE username = :username
                     """
