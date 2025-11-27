@@ -808,7 +808,7 @@ def saveRoute(user_id):
             elif not transport_id_exists(connection, transport_id):
                 transport_id = ensure_transport_mode_id(connection, DEFAULT_TRANSPORT_TYPE)
 
-            result = connection.execute(
+            route_id = connection.execute(
                 text(
                     """
                     INSERT INTO TRAVEL_ROUTE (
@@ -833,9 +833,9 @@ def saveRoute(user_id):
                     "totalCost": payload.get("totalCost", ""),
                     "directions": payload.get("directions", []),
                 },
-            ).fetchone()
+            ).scalar_one()
 
-        return jsonify({"success": True, "routeID": result.routeID}), 201
+        return jsonify({"success": True, "routeID": route_id}), 201
     except SQLAlchemyError as exc:
         print("Error saving route", exc)
         return jsonify({"message": "Unable to save route"}), 500
