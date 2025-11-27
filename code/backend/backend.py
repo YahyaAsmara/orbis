@@ -214,28 +214,35 @@ def fetch_locations(connection, user_id: int):
     rows = connection.execute(
         text(
             """
-            SELECT locationID, coordinate, locationName, locationType, isPublic,
-                   maxCapacity, parkingSpaces, createdBy
+            SELECT
+                locationID   AS "locationID",
+                coordinate   AS "coordinate",
+                locationName AS "locationName",
+                locationType AS "locationType",
+                isPublic     AS "isPublic",
+                maxCapacity  AS "maxCapacity",
+                parkingSpaces AS "parkingSpaces",
+                createdBy    AS "createdBy"
             FROM CELL
             WHERE createdBy = :uid
             ORDER BY locationID
             """
         ),
         {"uid": user_id},
-    ).fetchall()
+    ).mappings().all()
 
     locations = []
     for row in rows:
-        coord = point_to_pair(row.coordinate)
+        coord = point_to_pair(row["coordinate"])
         locations.append({
-            "locationID": row.locationID,
+            "locationID": row["locationID"],
             "coordinate": coord,
-            "locationName": row.locationName,
-            "locationType": row.locationType,
-            "isPublic": bool(row.isPublic),
-            "maxCapacity": int(row.maxCapacity or 0),
-            "parkingSpaces": int(row.parkingSpaces or 0),
-            "createdBy": row.createdBy,
+            "locationName": row["locationName"],
+            "locationType": row["locationType"],
+            "isPublic": bool(row["isPublic"]),
+            "maxCapacity": int(row["maxCapacity"] or 0),
+            "parkingSpaces": int(row["parkingSpaces"] or 0),
+            "createdBy": row["createdBy"],
         })
 
     return locations
@@ -245,22 +252,27 @@ def fetch_roads(connection):
     rows = connection.execute(
         text(
             """
-            SELECT roadID, roadSegment, roadName, distance, roadType
+            SELECT
+                roadID      AS "roadID",
+                roadSegment AS "roadSegment",
+                roadName    AS "roadName",
+                distance    AS "distance",
+                roadType    AS "roadType"
             FROM ROAD
             ORDER BY roadID
             """
         )
-    ).fetchall()
+    ).mappings().all()
 
     roads = []
     for row in rows:
-        segment = lseg_to_pair(row.roadSegment)
+        segment = lseg_to_pair(row["roadSegment"])
         roads.append({
-            "roadID": row.roadID,
+            "roadID": row["roadID"],
             "roadSegment": segment,
-            "roadName": row.roadName,
-            "distance": float(row.distance),
-            "roadType": row.roadType,
+            "roadName": row["roadName"],
+            "distance": float(row["distance"]),
+            "roadType": row["roadType"],
         })
 
     return roads
@@ -270,28 +282,36 @@ def fetch_saved_routes(connection, user_id: int):
     rows = connection.execute(
         text(
             """
-            SELECT routeID, storedBy, modeOfTransportID, startCellCoord, endCellCoord,
-                   travelTime, totalDistance, totalCost, directions
+            SELECT
+                routeID          AS "routeID",
+                storedBy         AS "storedBy",
+                modeOfTransportID AS "modeOfTransportID",
+                startCellCoord   AS "startCellCoord",
+                endCellCoord     AS "endCellCoord",
+                travelTime       AS "travelTime",
+                totalDistance    AS "totalDistance",
+                totalCost        AS "totalCost",
+                directions       AS "directions"
             FROM TRAVEL_ROUTE
             WHERE storedBy = :uid
             ORDER BY routeID DESC
             """
         ),
         {"uid": user_id},
-    ).fetchall()
+    ).mappings().all()
 
     routes = []
     for row in rows:
-        directions = row.directions if isinstance(row.directions, list) else []
+        directions = row["directions"] if isinstance(row["directions"], list) else []
         routes.append({
-            "routeID": row.routeID,
-            "storedBy": row.storedBy,
-            "modeOfTransportID": row.modeOfTransportID,
-            "startCellCoord": point_to_pair(row.startCellCoord),
-            "endCellCoord": point_to_pair(row.endCellCoord),
-            "travelTime": row.travelTime,
-            "totalDistance": row.totalDistance,
-            "totalCost": row.totalCost,
+            "routeID": row["routeID"],
+            "storedBy": row["storedBy"],
+            "modeOfTransportID": row["modeOfTransportID"],
+            "startCellCoord": point_to_pair(row["startCellCoord"]),
+            "endCellCoord": point_to_pair(row["endCellCoord"]),
+            "travelTime": row["travelTime"],
+            "totalDistance": row["totalDistance"],
+            "totalCost": row["totalCost"],
             "directions": directions,
         })
 
@@ -548,7 +568,7 @@ def addLocation(user_id):
                     INSERT INTO CELL (coordinate, locationName, locationType, isPublic,
                                       maxCapacity, parkingSpaces, createdBy)
                     VALUES (point(:x, :y), :name, :type, :public, :capacity, :parking, :uid)
-                    RETURNING locationID
+                    RETURNING locationID AS "locationID"
                     """
                 ),
                 {
@@ -561,9 +581,9 @@ def addLocation(user_id):
                     "parking": payload.get("parkingSpaces", 0),
                     "uid": user_id,
                 },
-            ).fetchone()
+            ).mappings().fetchone()
 
-        return jsonify({"success": True, "locationID": result.locationID}), 201
+        return jsonify({"success": True, "locationID": result["locationID"]}), 201
     except SQLAlchemyError as exc:
         print("Error adding location", exc)
         return jsonify({"message": "Unable to add location"}), 500
