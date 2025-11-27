@@ -544,8 +544,8 @@ def delete_location_entry(connection, location_row: Mapping[str, object]):
             DELETE FROM TRAVEL_ROUTE
             WHERE storedBy = :uid
               AND (
-                    startCellCoord = point(:x, :y)
-                 OR endCellCoord = point(:x, :y)
+                                        (startCellCoord[0] = :x AND startCellCoord[1] = :y)
+                                 OR (endCellCoord[0] = :x AND endCellCoord[1] = :y)
               )
             """
         ),

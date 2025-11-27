@@ -227,24 +227,19 @@ export default function AdminDashboard() {
         currentUserId={currentUserId}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
-          <LocationsPanel
-            loading={isRefreshing && locations.length === 0}
-            locations={locations}
-            onDelete={handleDeleteLocationRecord}
-            busyMap={locationBusy}
-          />
-        </div>
-        <div>
-          <RoutesPanel
-            loading={isRefreshing && routes.length === 0}
-            routes={routes}
-            onDelete={handleDeleteRouteRecord}
-            busyMap={routeBusy}
-          />
-        </div>
-      </div>
+      <LocationsPanel
+        loading={isRefreshing && locations.length === 0}
+        locations={locations}
+        onDelete={handleDeleteLocationRecord}
+        busyMap={locationBusy}
+      />
+
+      <RoutesPanel
+        loading={isRefreshing && routes.length === 0}
+        routes={routes}
+        onDelete={handleDeleteRouteRecord}
+        busyMap={routeBusy}
+      />
 
       <RoadsPanel
         loading={isRefreshing && roads.length === 0}
