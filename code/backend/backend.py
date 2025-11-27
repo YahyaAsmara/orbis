@@ -524,13 +524,18 @@ def prune_auto_roads_for_user(connection, user_id: int) -> int:
 
 
 def delete_location_entry(connection, location_row: Mapping[str, object]):
-    coord_pair = point_to_pair(location_row.get("coordinate"))
+    normalized = dict(location_row)
+    coord_pair = point_to_pair(normalized.get("coordinate"))
     if coord_pair is None:
         raise ValueError("Location coordinate missing")
 
-    owner_id = location_row.get("createdBy")
+    owner_id = normalized.get("createdBy")
     if owner_id is None:
         raise ValueError("Location owner missing")
+
+    location_id = normalized.get("locationID")
+    if location_id is None:
+        raise ValueError("Location ID missing")
 
     x_coord, y_coord = coord_pair
     deleted_routes = connection.execute(
@@ -549,7 +554,7 @@ def delete_location_entry(connection, location_row: Mapping[str, object]):
 
     connection.execute(
         text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
-        {"lid": location_row.get("locationID"), "uid": owner_id},
+        {"lid": location_id, "uid": owner_id},
     )
 
     pruned_roads = prune_auto_roads_for_user(connection, owner_id)

@@ -227,19 +227,23 @@ export default function AdminDashboard() {
         currentUserId={currentUserId}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <LocationsPanel
-          loading={isRefreshing && locations.length === 0}
-          locations={locations}
-          onDelete={handleDeleteLocationRecord}
-          busyMap={locationBusy}
-        />
-        <RoutesPanel
-          loading={isRefreshing && routes.length === 0}
-          routes={routes}
-          onDelete={handleDeleteRouteRecord}
-          busyMap={routeBusy}
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2">
+          <LocationsPanel
+            loading={isRefreshing && locations.length === 0}
+            locations={locations}
+            onDelete={handleDeleteLocationRecord}
+            busyMap={locationBusy}
+          />
+        </div>
+        <div>
+          <RoutesPanel
+            loading={isRefreshing && routes.length === 0}
+            routes={routes}
+            onDelete={handleDeleteRouteRecord}
+            busyMap={routeBusy}
+          />
+        </div>
       </div>
 
       <RoadsPanel
@@ -455,8 +459,8 @@ function LocationsPanel({
         </div>
       </div>
       <div className="border border-topo-brown">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
-          <span className="px-3 py-2 col-span-2">Name</span>
+        <div className="grid grid-cols-[2.4fr_1.2fr_1.2fr_1fr_auto] text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
+          <span className="px-3 py-2">Name</span>
           <span className="px-3 py-2">Type</span>
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Access</span>
@@ -469,10 +473,10 @@ function LocationsPanel({
             <div className="p-4 text-mono text-sm text-contour">No locations match your search.</div>
           ) : (
             filtered.map((loc) => (
-              <div key={loc.locationID} className="grid grid-cols-5 items-center text-mono text-sm">
-                <span className="px-3 py-2 font-bold text-topo-brown col-span-2">{loc.locationName}</span>
-                <span className="px-3 py-2 text-2xs uppercase">{loc.locationType}</span>
-                <span className="px-3 py-2 text-contour">{loc.owner}</span>
+              <div key={loc.locationID} className="grid grid-cols-[2.4fr_1.2fr_1.2fr_1fr_auto] items-center text-mono text-sm">
+                <span className="px-3 py-2 font-bold text-topo-brown truncate" title={loc.locationName}>{loc.locationName}</span>
+                <span className="px-3 py-2 text-2xs uppercase truncate" title={loc.locationType}>{loc.locationType}</span>
+                <span className="px-3 py-2 text-contour truncate" title={loc.owner}>{loc.owner}</span>
                 <span className="px-3 py-2 text-2xs">{loc.isPublic ? 'Public' : 'Private'}</span>
                 <span className="px-3 py-2 text-right">
                   <button
@@ -530,7 +534,7 @@ function RoutesPanel({
         />
       </div>
       <div className="border border-topo-brown">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream sticky top-0">
+        <div className="grid grid-cols-[1.3fr_1fr_1.6fr_1.2fr_auto] text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream sticky top-0">
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Transport</span>
           <span className="px-3 py-2">Path</span>
@@ -544,8 +548,8 @@ function RoutesPanel({
             <div className="p-4 text-mono text-sm text-contour">No routes match your search.</div>
           ) : (
             filtered.map((route) => (
-              <div key={route.routeID} className="grid grid-cols-5 text-mono text-sm items-center">
-                <span className="px-3 py-2 font-bold text-topo-brown">{route.owner}</span>
+              <div key={route.routeID} className="grid grid-cols-[1.3fr_1fr_1.6fr_1.2fr_auto] text-mono text-sm items-center">
+                <span className="px-3 py-2 font-bold text-topo-brown truncate" title={route.owner}>{route.owner}</span>
                 <span className="px-3 py-2 text-2xs uppercase">{route.transportType ?? '—'}</span>
                 <span className="px-3 py-2 text-2xs">
                   [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
@@ -619,8 +623,8 @@ function RoadsPanel({
         />
       </div>
       <div className="border border-topo-brown">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
-          <span className="px-3 py-2 col-span-2">Road</span>
+        <div className="grid grid-cols-[2.4fr_1fr_1fr_auto] text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
+          <span className="px-3 py-2">Road</span>
           <span className="px-3 py-2">Distance</span>
           <span className="px-3 py-2">Status</span>
           <span className="px-3 py-2 text-right">Actions</span>
@@ -632,17 +636,19 @@ function RoadsPanel({
             <div className="p-4 text-mono text-sm text-contour">No roads match your search.</div>
           ) : (
             filtered.map((road) => {
-            const linkedNames = road.connectedLocations && road.connectedLocations.length > 0
-              ? road.connectedLocations.map((conn) => describeConnection(conn)).join(' ↔ ')
-              : 'Unlinked'
-            return (
-              <div key={road.roadID} className="grid grid-cols-5 text-mono text-sm items-center">
-                <span className="px-3 py-2 col-span-2">
-                  <span className="font-bold text-topo-brown">{road.roadName || `Road #${road.roadID}`}</span>
-                  <span className="block text-2xs text-contour">{linkedNames}</span>
-                </span>
-                <span className="px-3 py-2 text-xs">{road.distance} leagues</span>
-                <span className="px-3 py-2 text-xs">{road.roadType}</span>
+              const linkedNames = road.connectedLocations && road.connectedLocations.length > 0
+                ? road.connectedLocations.map((conn) => describeConnection(conn)).join(' ↔ ')
+                : 'Unlinked'
+              return (
+                <div key={road.roadID} className="grid grid-cols-[2.4fr_1fr_1fr_auto] text-mono text-sm items-center">
+                  <span className="px-3 py-2">
+                    <span className="font-bold text-topo-brown truncate" title={road.roadName || `Road #${road.roadID}`}>
+                      {road.roadName || `Road #${road.roadID}`}
+                    </span>
+                    <span className="block text-2xs text-contour truncate" title={linkedNames}>{linkedNames}</span>
+                  </span>
+                  <span className="px-3 py-2 text-xs">{road.distance} leagues</span>
+                  <span className="px-3 py-2 text-xs capitalize">{road.roadType}</span>
                   <span className="px-3 py-2 text-right">
                     <button
                       className="text-mono text-2xs uppercase tracking-widest underline"
@@ -652,8 +658,8 @@ function RoadsPanel({
                       {busyMap[road.roadID] ? 'Removing…' : 'Remove'}
                     </button>
                   </span>
-              </div>
-            )
+                </div>
+              )
             })
           )}
         </div>
