@@ -6,6 +6,7 @@ import MapView from './pages/MapView'
 import Places from './pages/Places'
 import PlaceDetail from './pages/PlaceDetail'
 import AdminDashboard from './pages/AdminDashboard'
+import Profile from './pages/Profile'
 import { authAPI } from './services/api'
 import type { UserRole } from './types/models'
 
@@ -58,6 +59,7 @@ export default function App() {
                   <NavLink to="/">Home</NavLink>
                   <NavLink to="/map">Map</NavLink>
                   <NavLink to="/places">Locations</NavLink>
+                  <NavLink to="/profile">Profile</NavLink>
                   {userRole === 'admin' && <NavLink to="/admin">Admin</NavLink>}
                   <button
                     onClick={handleSignOut}
@@ -92,6 +94,7 @@ export default function App() {
           <Route path="/map" element={isAuthenticated ? <MapView /> : <Login onLogin={handleLogin} />} />
           <Route path="/places" element={isAuthenticated ? <Places /> : <Login onLogin={handleLogin} />} />
           <Route path="/places/:id" element={isAuthenticated ? <PlaceDetail /> : <Login onLogin={handleLogin} />} />
+          <Route path="/profile" element={isAuthenticated ? <Profile /> : <Login onLogin={handleLogin} />} />
           <Route
             path="/admin"
             element={isAuthenticated

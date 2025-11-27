@@ -213,6 +213,10 @@ export const profileAPI = {
   }> {
     return apiRequest(`/${userId}/`, { method: 'GET' })
   },
+
+  async deleteAccount(userId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/${userId}/delete_account`, { method: 'DELETE' })
+  },
 }
 
 // Admin-only endpoints
@@ -227,6 +231,17 @@ export const adminAPI = {
 
   async getActivity(): Promise<AdminActivity[]> {
     return apiRequest('/admin/activity', { method: 'GET' })
+  },
+
+  async updateUserRole(userId: number, role: UserRole): Promise<{ success: boolean }> {
+    return apiRequest(`/admin/users/${userId}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    })
+  },
+
+  async removeUser(userId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/admin/users/${userId}`, { method: 'DELETE' })
   },
 }
 

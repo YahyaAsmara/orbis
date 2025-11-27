@@ -35,8 +35,9 @@ interface StoredRoute extends RouteSummary {
 }
 
 const generateRouteId = () => {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID()
+  const cryptoObj = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { crypto?: Crypto }).crypto : undefined
+  if (cryptoObj && 'randomUUID' in cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID()
   }
   return `route-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
@@ -370,6 +371,9 @@ export default function MapView() {
               }}
               onPathComputed={(result: ComputePathResponse, mode: ModeOfTransport['transportType']) => {
                 const adjusted = adjustSummaryForTransport(result, mode)
+                if (routeSummary) {
+                  setRouteHistory((prev) => [...prev, { ...routeSummary, id: generateRouteId() }])
+                }
                 setComputedPath(adjusted.path)
                 setRouteSummary(adjusted)
                 if (!keepRouteVisible) {

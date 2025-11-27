@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { adminAPI, authAPI } from '../services/api'
 import type { AdminActivity, AdminOverview, AdminUserRecord } from '../types/models'
@@ -12,6 +12,9 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'mapper' | 'viewer'>('all')
+  const [roleBusy, setRoleBusy] = useState<Record<number, boolean>>({})
+  const [deleteBusy, setDeleteBusy] = useState<Record<number, boolean>>({})
+  const currentUserId = authAPI.getCurrentUserId()
 
   useEffect(() => {
     if (!authAPI.isAuthenticated()) {
@@ -63,6 +66,52 @@ export default function AdminDashboard() {
     )
   }, [users])
 
+  const toggleBusy = (
+    setter: Dispatch<SetStateAction<Record<number, boolean>>>,
+    userId: number,
+    value: boolean,
+  ) => {
+    setter((prev) => {
+      const next = { ...prev }
+      if (value) next[userId] = true
+      else delete next[userId]
+      return next
+    })
+  }
+
+  const handleRoleChange = async (userId: number, role: AdminUserRecord['role']) => {
+    toggleBusy(setRoleBusy, userId, true)
+    try {
+      await adminAPI.updateUserRole(userId, role)
+      await refreshAll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to update role'
+      setError(message)
+    } finally {
+      toggleBusy(setRoleBusy, userId, false)
+    }
+  }
+
+  const handleDeleteUser = async (userId: number) => {
+    if (userId === currentUserId) {
+      alert('You cannot delete the account currently in use.')
+      return
+    }
+    const confirmed = window.confirm('Remove this user and all of their data?')
+    if (!confirmed) return
+
+    toggleBusy(setDeleteBusy, userId, true)
+    try {
+      await adminAPI.removeUser(userId)
+      await refreshAll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete user'
+      setError(message)
+    } finally {
+      toggleBusy(setDeleteBusy, userId, false)
+    }
+  }
+
   return (
     <div className="animate-fade-in space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -102,6 +151,8 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      <AdminBootstrapHint />
+
       <OverviewGrid overview={overview} roleStats={roleStats} loading={isRefreshing && !overview} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -114,6 +165,11 @@ export default function AdminDashboard() {
             onSearch={setSearch}
             roleFilter={roleFilter}
             onRoleFilter={setRoleFilter}
+            onChangeRole={handleRoleChange}
+            onDeleteUser={handleDeleteUser}
+            roleBusy={roleBusy}
+            deleteBusy={deleteBusy}
+            currentUserId={currentUserId}
           />
         </div>
         <div>
@@ -169,6 +225,11 @@ function UserRoster({
   onSearch,
   roleFilter,
   onRoleFilter,
+  onChangeRole,
+  onDeleteUser,
+  roleBusy,
+  deleteBusy,
+  currentUserId,
 }: {
   loading: boolean
   users: AdminUserRecord[]
@@ -177,6 +238,11 @@ function UserRoster({
   onSearch: (value: string) => void
   roleFilter: 'all' | 'admin' | 'mapper' | 'viewer'
   onRoleFilter: (value: 'all' | 'admin' | 'mapper' | 'viewer') => void
+  onChangeRole: (userId: number, role: AdminUserRecord['role']) => void
+  onDeleteUser: (userId: number) => void
+  roleBusy: Record<number, boolean>
+  deleteBusy: Record<number, boolean>
+  currentUserId: number | null
 }) {
   return (
     <div className="card p-6 space-y-4">
@@ -206,11 +272,12 @@ function UserRoster({
       </div>
 
       <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
+        <div className="grid grid-cols-6 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
           <span className="px-3 py-2 col-span-2">User</span>
           <span className="px-3 py-2">Role</span>
           <span className="px-3 py-2">Locations</span>
           <span className="px-3 py-2">Last Active</span>
+          <span className="px-3 py-2">Actions</span>
         </div>
         {loading ? (
           <SkeletonRow />
@@ -220,7 +287,7 @@ function UserRoster({
           </div>
         ) : (
           users.map((user) => (
-            <div key={user.userID} className="grid grid-cols-5 items-center">
+            <div key={user.userID} className="grid grid-cols-6 items-center">
               <div className="px-3 py-3 col-span-2">
                 <p className="text-mono text-sm font-bold">{user.username}</p>
                 <p className="text-mono text-xs text-contour">{user.email}</p>
@@ -234,10 +301,43 @@ function UserRoster({
               <div className="px-3 text-mono text-xs text-contour">
                 {new Date(user.lastActive).toLocaleString()}
               </div>
+              <div className="px-3 py-2 flex flex-col gap-2">
+                <select
+                  value={user.role}
+                  onChange={(e) => onChangeRole(user.userID, e.target.value as AdminUserRecord['role'])}
+                  disabled={!!roleBusy[user.userID]}
+                  className="input text-2xs"
+                >
+                  <option value="admin">Admin</option>
+                  <option value="mapper">Mapper</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+                <button
+                  onClick={() => onDeleteUser(user.userID)}
+                  disabled={!!deleteBusy[user.userID] || user.userID === currentUserId}
+                  className="btn btn-secondary text-2xs"
+                >
+                  {deleteBusy[user.userID] ? 'Removing…' : 'Remove'}
+                </button>
+              </div>
             </div>
           ))
         )}
       </div>
+    </div>
+  )
+}
+
+function AdminBootstrapHint() {
+  const snippet = "UPDATE USERS SET userRole = 'admin' WHERE username = 'your_username';"
+  return (
+    <div className="card border-2 border-topo-brown bg-topo-cream/70 p-4 text-mono text-xs text-topo-brown">
+      <p className="uppercase tracking-widest text-2xs text-contour mb-2">Admin bootstrapping</p>
+      <p>
+        Need to create the first admin? Run the following SQL against your database, replacing the username with an existing account:
+      </p>
+      <pre className="mt-3 bg-topo-cream border border-topo-brown p-3 overflow-auto">{snippet}</pre>
+      <p className="mt-2 text-contour">Once at least one admin exists you can promote or demote users directly from this dashboard.</p>
     </div>
   )
 }

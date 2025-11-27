@@ -2,11 +2,10 @@
 Back-end code to connect the front-end portion of the web application to the database.
 Written in Python using Flask.
 
-Author: 
+Author: Jason Duong, Yahya Asmara, Abdulrahman Negmeldin
 """
 
 """
-TODO: REMOVE THIS COMMENT BLOCK ONCE APPROPRIATE
 How to connect to DB:
 - db_engine = create_engine(DATABASE_URL) #DATABASE_URL is kept that way. It is an environment variable in Render with the DB key
 - connection_to_db = db_engine.connect() #Connect to the engine to begin inserting commands into the DB
@@ -47,14 +46,6 @@ Import request to handle requests from the front-end.
 Import jsonify so communications to the front-end are in the form of JSON.
 - JSON is used as this uses the REST standard and JSON is commonly used.
 Import session so that flask can manage sessions.
-"""
-
-"""
-Import LoginManager to help with handling log in functionality.
-Import login_required to prevent unauthorized users from accessing certain parts of the web application.
-Import login_user to allow flask login to keep track of user logins.
-Import logout_user to allow flask login to handle user logouts.
-Import current_user to allow flask login to keep track of the current user
 """
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
@@ -316,6 +307,22 @@ def fetch_saved_routes(connection, user_id: int):
         })
 
     return routes
+
+
+def delete_user_records(connection, user_id: int) -> bool:
+    connection.execute(
+        text("DELETE FROM TRAVEL_ROUTE WHERE storedBy = :uid"),
+        {"uid": user_id},
+    )
+    connection.execute(
+        text("DELETE FROM CELL WHERE createdBy = :uid"),
+        {"uid": user_id},
+    )
+    result = connection.execute(
+        text("DELETE FROM USERS WHERE userID = :uid"),
+        {"uid": user_id},
+    )
+    return result.rowcount > 0
 
 
 def require_auth(required_role: str | None = None, enforce_user_match: bool = False):
@@ -802,6 +809,22 @@ def getProfileData(user_id):
     except SQLAlchemyError as exc:
         print("Error loading profile", exc)
         return jsonify({"message": "Unable to load profile"}), 500
+
+
+@webApp.route("/<int:user_id>/delete_account", methods=["DELETE"])
+@require_auth(enforce_user_match=True)
+def delete_account(user_id):
+    try:
+        with db_engine.begin() as connection:
+            deleted = delete_user_records(connection, user_id)
+
+        if not deleted:
+            return jsonify({"message": "User not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting account", exc)
+        return jsonify({"message": "Unable to delete account"}), 500
 #----------------------------
 
 #--Admin analytics--
@@ -888,6 +911,50 @@ def get_admin_users():
     except SQLAlchemyError as exc:
         print("Error loading admin users", exc)
         return jsonify({"message": "Unable to load user roster"}), 500
+
+
+@webApp.route("/admin/users/<int:target_id>/role", methods=["PATCH"])
+@require_auth(required_role="admin")
+def update_admin_user_role(target_id):
+    payload = request.get_json() or {}
+    new_role = payload.get("role")
+    if new_role not in {"admin", "mapper", "viewer"}:
+        return jsonify({"message": "Invalid role"}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text("UPDATE USERS SET userRole = :role WHERE userID = :uid"),
+                {"role": new_role, "uid": target_id},
+            )
+
+        if result.rowcount == 0:
+            return jsonify({"message": "User not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error updating user role", exc)
+        return jsonify({"message": "Unable to update role"}), 500
+
+
+@webApp.route("/admin/users/<int:target_id>", methods=["DELETE"])
+@require_auth(required_role="admin")
+def admin_delete_user(target_id):
+    current_admin = g.current_user["user_id"] if hasattr(g, "current_user") else None
+    if current_admin == target_id:
+        return jsonify({"message": "Cannot delete the currently authenticated admin"}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            deleted = delete_user_records(connection, target_id)
+
+        if not deleted:
+            return jsonify({"message": "User not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting user", exc)
+        return jsonify({"message": "Unable to delete user"}), 500
 
 
 @webApp.route("/admin/activity", methods=["GET"])

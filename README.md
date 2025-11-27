@@ -22,9 +22,9 @@ Orbis allows users to create custom locations, landmarks, and road networks with
 ```
 root/
 ├── code/
-│   ├── frontend/       # React SPA with Three.js* map visualization
-│   ├── backend/        # Flask API with PostgreSQL*
-│   └── database/       # MySQL/MariaDB/PostgreSQL* schemas and scripts
+│   ├── frontend/       # React SPA with leafletjs* map visualization
+│   ├── backend/        # Flask API with SQLAlchemy -> PostgreSQL*
+│   └── database/       # PostgreSQL* schemas and scripts
 └── documentation/      # Project proposals, contracts, and reports
 ```
 * Subject to change.
@@ -32,9 +32,21 @@ root/
 ## Tech Stack
 
 - **Backend**: Python + Flask with SQLAlchemy ORM
-- **Frontend**: HTML5, CSS3, JavaScript/React with Three.js for map visualization
-- **Database**: MySQL/MariaDB
+- **Frontend**: Typscript (HTML5, CSS3, JavaScript/React) with leafletjs for map visualization
+- **Database**: PostgreSQL
 - **Architecture**: Single Page Application (SPA) with RESTful API
+
+## Admin Access & Account Management
+
+- The first administrator must be promoted manually in the database. Run:
+
+	```sql
+	UPDATE USERS SET userRole = 'admin' WHERE username = 'your_username';
+	```
+
+	Replace `your_username` with an existing account. After one admin exists, use the in-app Admin dashboard to promote/demote other users or remove dormant accounts.
+
+- Signed-in users can visit `/profile` to review their account, inspect stored locations/routes, and delete their account (which cascades to their locations and saved paths). Deleting an account signs the user out automatically.
 
 ## Team
 
