@@ -225,7 +225,7 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
     ).mappings().fetchone()
 
     if existing:
-        return existing.transportID
+        return existing["transportID"]
 
     defaults = TRANSPORT_MODE_DEFAULTS.get(normalized, TRANSPORT_MODE_DEFAULTS[DEFAULT_TRANSPORT_TYPE])
     created = connection.execute(
@@ -244,7 +244,7 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
         },
     ).mappings().fetchone()
 
-    return created.transportID
+    return created["transportID"]
 
 
 def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
