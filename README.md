@@ -38,13 +38,17 @@ root/
 
 ## Admin Access & Account Management
 
-- The first administrator must be promoted manually in the database. Run:
+- The first administrator must be promoted manually in the database. Use the helper REPL so the SQL actually executes against PostgreSQL:
 
-	```sql
-	UPDATE USERS SET userRole = 'admin' WHERE username = 'your_username';
+	```bash
+	export DATABASE_URL="postgres://<user>:<password>@<host>:<port>/<db>"
+	python3 code/database/interact_with_db.py
+	# inside the prompt:
+	# sql> UPDATE USERS SET userRole = 'admin' WHERE username = 'your_username';
+	# sql> exit
 	```
 
-	Replace `your_username` with an existing account. After one admin exists, use the in-app Admin dashboard to promote/demote other users or remove dormant accounts.
+	The script opens a real DB connection, auto-commits each statement, and prints results/errors. After one admin exists, use the in-app Admin dashboard to promote/demote other users or remove dormant accounts.
 
 - Signed-in users can visit `/profile` to review their account, inspect stored locations/routes, and delete their account (which cascades to their locations and saved paths). Deleting an account signs the user out automatically.
 

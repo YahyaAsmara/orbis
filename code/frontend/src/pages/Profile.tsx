@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { authAPI, profileAPI } from '../services/api'
+import { authAPI, profileAPI, locationAPI, routeAPI } from '../services/api'
 import type { Location, TravelRoute, User } from '../types/models'
 
 interface ProfilePayload {
@@ -16,6 +16,8 @@ export default function Profile() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [removingLocationId, setRemovingLocationId] = useState<number | null>(null)
+  const [removingRouteId, setRemovingRouteId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!userId) {
@@ -56,6 +58,42 @@ export default function Profile() {
       setError(message)
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleRemoveLocation = async (locationID: number) => {
+    if (!userId) return
+    const confirmed = window.confirm('Remove this location from your map?')
+    if (!confirmed) return
+
+    setRemovingLocationId(locationID)
+    setError(null)
+    try {
+      await locationAPI.removeLocation(userId, locationID)
+      setData((prev) => prev ? { ...prev, locations: prev.locations.filter((loc) => loc.locationID !== locationID) } : prev)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to remove location'
+      setError(message)
+    } finally {
+      setRemovingLocationId(null)
+    }
+  }
+
+  const handleRemoveRoute = async (routeID: number) => {
+    if (!userId) return
+    const confirmed = window.confirm('Delete this saved route?')
+    if (!confirmed) return
+
+    setRemovingRouteId(routeID)
+    setError(null)
+    try {
+      await routeAPI.removeSavedPath(userId, routeID)
+      setData((prev) => prev ? { ...prev, savedRoutes: prev.savedRoutes.filter((route) => route.routeID !== routeID) } : prev)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to remove route'
+      setError(message)
+    } finally {
+      setRemovingRouteId(null)
     }
   }
 
@@ -160,6 +198,13 @@ export default function Profile() {
                 <p className="text-mono text-xs text-contour">{loc.locationType} · [{loc.coordinate[0]}, {loc.coordinate[1]}]</p>
                 <p className="text-mono text-xs mt-1">Capacity {loc.maxCapacity} · Parking {loc.parkingSpaces}</p>
                 <p className="text-mono text-xs text-contour">{loc.isPublic ? 'Public' : 'Private'}</p>
+                <button
+                  className="btn btn-secondary text-2xs mt-3"
+                  onClick={() => handleRemoveLocation(loc.locationID)}
+                  disabled={removingLocationId === loc.locationID}
+                >
+                  {removingLocationId === loc.locationID ? 'Removing…' : 'Remove'}
+                </button>
               </div>
             ))}
           </div>
@@ -186,6 +231,13 @@ export default function Profile() {
                   Start [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → End [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
                 </p>
                 <p className="text-mono text-xs">Distance {route.totalDistance} · Time {route.travelTime} · Cost {route.totalCost}</p>
+                <button
+                  className="btn btn-secondary text-2xs mt-2 self-start"
+                  onClick={() => handleRemoveRoute(route.routeID)}
+                  disabled={removingRouteId === route.routeID}
+                >
+                  {removingRouteId === route.routeID ? 'Removing…' : 'Remove'}
+                </button>
               </div>
             ))}
           </div>
