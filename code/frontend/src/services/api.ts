@@ -1,6 +1,7 @@
 import type {
   User,
   Location,
+  Road,
   TravelRoute,
   SaveRouteRequest,
   CreateAccountRequest,
@@ -12,8 +13,9 @@ import type {
   ComputePathResponse,
   AdminOverview,
   AdminUserRecord,
-  AdminActivity,
   UserRole,
+  AdminLocationRecord,
+  AdminRouteRecord,
 } from '../types/models'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -211,6 +213,7 @@ export const profileAPI = {
     user: User
     locations: Location[]
     savedRoutes: TravelRoute[]
+    roads: Road[]
   }> {
     return apiRequest(`/${userId}/`, { method: 'GET' })
   },
@@ -230,8 +233,12 @@ export const adminAPI = {
     return apiRequest('/admin/users', { method: 'GET' })
   },
 
-  async getActivity(): Promise<AdminActivity[]> {
-    return apiRequest('/admin/activity', { method: 'GET' })
+  async getLocations(): Promise<AdminLocationRecord[]> {
+    return apiRequest('/admin/locations', { method: 'GET' })
+  },
+
+  async getRoutes(): Promise<AdminRouteRecord[]> {
+    return apiRequest('/admin/routes', { method: 'GET' })
   },
 
   async updateUserRole(userId: number, role: UserRole): Promise<{ success: boolean }> {
@@ -246,10 +253,20 @@ export const adminAPI = {
   },
 }
 
+export const roadAPI = {
+  async updateRoadStatus(roadId: number, roadType: Road['roadType']): Promise<{ success: boolean; roadType: Road['roadType'] }> {
+    return apiRequest(`/roads/${roadId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ roadType }),
+    })
+  },
+}
+
 export default {
   auth: authAPI,
   location: locationAPI,
   route: routeAPI,
   profile: profileAPI,
   admin: adminAPI,
+  road: roadAPI,
 }

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { authAPI, profileAPI, locationAPI, routeAPI } from '../services/api'
-import type { Location, TravelRoute, User } from '../types/models'
+import { authAPI, profileAPI, locationAPI, routeAPI, roadAPI } from '../services/api'
+import { findStoredRouteByRecordId, setPendingRouteSelection } from '../utils/routePersistence'
+import type { Location, TravelRoute, User, Road } from '../types/models'
 
 interface ProfilePayload {
   user: User
   locations: Location[]
   savedRoutes: TravelRoute[]
+  roads: Road[]
 }
 
 export default function Profile() {
@@ -18,6 +20,7 @@ export default function Profile() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [removingLocationId, setRemovingLocationId] = useState<number | null>(null)
   const [removingRouteId, setRemovingRouteId] = useState<number | null>(null)
+  const [updatingRoadId, setUpdatingRoadId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!userId) {
@@ -94,6 +97,35 @@ export default function Profile() {
       setError(message)
     } finally {
       setRemovingRouteId(null)
+    }
+  }
+
+  const handleViewRouteOnMap = (routeID: number) => {
+    if (!userId) return
+    const stored = findStoredRouteByRecordId(userId, routeID)
+    if (!stored) {
+      alert('This route overlay has not been cached on this device yet. Open it from the Map once to store the geometry.')
+      return
+    }
+    setPendingRouteSelection({ userId, storedRouteId: stored.id })
+    navigate('/map')
+  }
+
+  const handleToggleRoad = async (road: Road) => {
+    setUpdatingRoadId(road.roadID)
+    setError(null)
+    try {
+      const nextType = road.roadType === 'blocked' ? 'unblocked' : 'blocked'
+      await roadAPI.updateRoadStatus(road.roadID, nextType)
+      setData((prev) => prev ? {
+        ...prev,
+        roads: prev.roads.map((r) => r.roadID === road.roadID ? { ...r, roadType: nextType } : r),
+      } : prev)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to update road'
+      setError(message)
+    } finally {
+      setUpdatingRoadId(null)
     }
   }
 
@@ -231,12 +263,53 @@ export default function Profile() {
                   Start [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → End [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
                 </p>
                 <p className="text-mono text-xs">Distance {route.totalDistance} · Time {route.travelTime} · Cost {route.totalCost}</p>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    className="btn btn-primary text-2xs"
+                    onClick={() => handleViewRouteOnMap(route.routeID)}
+                  >
+                    View on map
+                  </button>
+                  <button
+                    className="btn btn-secondary text-2xs"
+                    onClick={() => handleRemoveRoute(route.routeID)}
+                    disabled={removingRouteId === route.routeID}
+                  >
+                    {removingRouteId === route.routeID ? 'Removing…' : 'Remove'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="card p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-mono text-2xs uppercase tracking-widest text-contour">Road Network</p>
+            <h2 className="text-display text-3xl font-black text-topo-brown">{data?.roads.length ?? 0}</h2>
+          </div>
+        </div>
+        {loading ? (
+          <p className="text-mono text-sm text-contour">Loading roads…</p>
+        ) : data && data.roads.length === 0 ? (
+          <p className="text-mono text-sm text-contour">No roads are registered yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {data?.roads.map((road) => (
+              <div key={road.roadID} className="border-2 border-topo-brown p-4 flex flex-col gap-1">
+                <p className="text-mono text-sm font-bold">{road.roadName ?? `Road #${road.roadID}`}</p>
+                <p className="text-mono text-xs text-contour">
+                  Segment [{road.roadSegment[0][0]}, {road.roadSegment[0][1]}] → [{road.roadSegment[1][0]}, {road.roadSegment[1][1]}]
+                </p>
+                <p className="text-mono text-xs">Distance {road.distance} · Status {road.roadType === 'blocked' ? 'Blocked' : 'Unblocked'}</p>
                 <button
                   className="btn btn-secondary text-2xs mt-2 self-start"
-                  onClick={() => handleRemoveRoute(route.routeID)}
-                  disabled={removingRouteId === route.routeID}
+                  onClick={() => handleToggleRoad(road)}
+                  disabled={updatingRoadId === road.roadID}
                 >
-                  {removingRouteId === route.routeID ? 'Removing…' : 'Remove'}
+                  {updatingRoadId === road.roadID ? 'Updating…' : road.roadType === 'blocked' ? 'Unblock' : 'Block'}
                 </button>
               </div>
             ))}

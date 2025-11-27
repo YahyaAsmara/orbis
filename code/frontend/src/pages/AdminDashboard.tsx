@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { adminAPI, authAPI } from '../services/api'
-import type { AdminActivity, AdminOverview, AdminUserRecord } from '../types/models'
+import type { AdminOverview, AdminUserRecord, AdminLocationRecord, AdminRouteRecord } from '../types/models'
 
 export default function AdminDashboard() {
   const navigate = useNavigate()
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [users, setUsers] = useState<AdminUserRecord[]>([])
-  const [activity, setActivity] = useState<AdminActivity[]>([])
+  const [locations, setLocations] = useState<AdminLocationRecord[]>([])
+  const [routes, setRoutes] = useState<AdminRouteRecord[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -28,14 +29,16 @@ export default function AdminDashboard() {
     setIsRefreshing(true)
     setError(null)
     try {
-      const [overviewData, usersData, activityData] = await Promise.all([
+      const [overviewData, usersData, locationsData, routesData] = await Promise.all([
         adminAPI.getOverview(),
         adminAPI.getUsers(),
-        adminAPI.getActivity(),
+        adminAPI.getLocations(),
+        adminAPI.getRoutes(),
       ])
       setOverview(overviewData)
       setUsers(usersData)
-      setActivity(activityData)
+      setLocations(locationsData)
+      setRoutes(routesData)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load admin data'
       setError(message)
@@ -155,29 +158,30 @@ export default function AdminDashboard() {
 
       <OverviewGrid overview={overview} roleStats={roleStats} loading={isRefreshing && !overview} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2">
-          <UserRoster
-            loading={isRefreshing && users.length === 0}
-            users={filteredUsers}
-            total={users.length}
-            search={search}
-            onSearch={setSearch}
-            roleFilter={roleFilter}
-            onRoleFilter={setRoleFilter}
-            onChangeRole={handleRoleChange}
-            onDeleteUser={handleDeleteUser}
-            roleBusy={roleBusy}
-            deleteBusy={deleteBusy}
-            currentUserId={currentUserId}
-          />
-        </div>
-        <div>
-          <ActivityFeed
-            loading={isRefreshing && activity.length === 0}
-            entries={activity}
-          />
-        </div>
+      <UserRoster
+        loading={isRefreshing && users.length === 0}
+        users={filteredUsers}
+        total={users.length}
+        search={search}
+        onSearch={setSearch}
+        roleFilter={roleFilter}
+        onRoleFilter={setRoleFilter}
+        onChangeRole={handleRoleChange}
+        onDeleteUser={handleDeleteUser}
+        roleBusy={roleBusy}
+        deleteBusy={deleteBusy}
+        currentUserId={currentUserId}
+      />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <LocationsPanel
+          loading={isRefreshing && locations.length === 0}
+          locations={locations}
+        />
+        <RoutesPanel
+          loading={isRefreshing && routes.length === 0}
+          routes={routes}
+        />
       </div>
     </div>
   )
@@ -192,12 +196,17 @@ function OverviewGrid({
   roleStats: Record<'admin' | 'mapper' | 'viewer', number>
   loading: boolean
 }) {
+  const averageLocations = overview && overview.totalUsers
+    ? (overview.totalLocations / Math.max(overview.totalUsers, 1)).toFixed(1)
+    : '—'
+
   const metrics = [
     { label: 'Total Users', value: overview?.totalUsers ?? '—' },
     { label: 'Total Locations', value: overview?.totalLocations ?? '—' },
     { label: 'Saved Routes', value: overview?.totalRoutes ?? '—' },
     { label: 'Blocked Roads', value: overview?.blockedRoads ?? '—' },
     { label: 'Pending Requests', value: overview?.pendingRequests ?? '—' },
+    { label: 'Avg Loc/User', value: averageLocations },
     { label: 'Role Mix', value: `${roleStats.admin} / ${roleStats.mapper} / ${roleStats.viewer}` },
   ]
 
@@ -342,40 +351,80 @@ function AdminBootstrapHint() {
   )
 }
 
-function ActivityFeed({
+function LocationsPanel({
   loading,
-  entries,
+  locations,
 }: {
   loading: boolean
-  entries: AdminActivity[]
+  locations: AdminLocationRecord[]
 }) {
-  const severityClasses: Record<AdminActivity['severity'], string> = {
-    info: 'border-topo-green text-topo-green',
-    warn: 'border-warn text-warn',
-    critical: 'border-accent text-accent',
-  }
-
   return (
     <div className="card p-6 space-y-4">
       <div>
-        <p className="text-mono text-2xs uppercase tracking-widest text-contour">Activity</p>
-        <h2 className="text-display text-2xl font-black text-topo-brown">Live feed</h2>
+        <p className="text-mono text-2xs uppercase tracking-widest text-contour">All Locations</p>
+        <h2 className="text-display text-2xl font-black text-topo-brown">{locations.length} records</h2>
       </div>
-      <div className="space-y-3 max-h-[520px] overflow-y-auto pr-2">
+      <div className="border border-topo-brown divide-y divide-topo-brown/30">
+        <div className="grid grid-cols-4 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
+          <span className="px-3 py-2">Name</span>
+          <span className="px-3 py-2">Type</span>
+          <span className="px-3 py-2">Owner</span>
+          <span className="px-3 py-2">Access</span>
+        </div>
         {loading ? (
           <SkeletonRow />
-        ) : entries.length === 0 ? (
-          <p className="text-mono text-sm text-contour">
-            No recent events logged.
-          </p>
+        ) : locations.length === 0 ? (
+          <div className="p-4 text-mono text-sm text-contour">No locations have been created yet.</div>
         ) : (
-          entries.map((entry) => (
-            <div key={entry.id} className={`border-l-4 pl-4 py-3 ${severityClasses[entry.severity]}`}>
-              <div className="flex justify-between text-mono text-2xs uppercase tracking-widest">
-                <span>{entry.type}</span>
-                <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-              </div>
-              <p className="text-mono text-sm mt-1">{entry.summary}</p>
+          locations.map((loc) => (
+            <div key={loc.locationID} className="grid grid-cols-4 text-mono text-sm">
+              <span className="px-3 py-2 font-bold text-topo-brown">{loc.locationName}</span>
+              <span className="px-3 py-2 text-xs uppercase">{loc.locationType}</span>
+              <span className="px-3 py-2 text-contour">{loc.owner}</span>
+              <span className="px-3 py-2 text-xs">{loc.isPublic ? 'Public' : 'Private'}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RoutesPanel({
+  loading,
+  routes,
+}: {
+  loading: boolean
+  routes: AdminRouteRecord[]
+}) {
+  return (
+    <div className="card p-6 space-y-4">
+      <div>
+        <p className="text-mono text-2xs uppercase tracking-widest text-contour">Saved Routes</p>
+        <h2 className="text-display text-2xl font-black text-topo-brown">{routes.length} entries</h2>
+      </div>
+      <div className="border border-topo-brown divide-y divide-topo-brown/30">
+        <div className="grid grid-cols-4 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
+          <span className="px-3 py-2">Owner</span>
+          <span className="px-3 py-2">Transport</span>
+          <span className="px-3 py-2">Path</span>
+          <span className="px-3 py-2">Metrics</span>
+        </div>
+        {loading ? (
+          <SkeletonRow />
+        ) : routes.length === 0 ? (
+          <div className="p-4 text-mono text-sm text-contour">No routes have been saved yet.</div>
+        ) : (
+          routes.map((route) => (
+            <div key={route.routeID} className="grid grid-cols-4 text-mono text-sm">
+              <span className="px-3 py-2 font-bold text-topo-brown">{route.owner}</span>
+              <span className="px-3 py-2 text-xs uppercase">{route.transportType ?? '—'}</span>
+              <span className="px-3 py-2 text-xs">
+                [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
+              </span>
+              <span className="px-3 py-2 text-xs">
+                {route.totalDistance} · {route.totalTime} · {route.totalCost}
+              </span>
             </div>
           ))
         )}

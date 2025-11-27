@@ -852,6 +852,30 @@ def getSavedRoutes(user_id):
         print("Error loading saved routes", exc)
         return jsonify({"message": "Unable to fetch saved routes"}), 500
 
+
+@webApp.route("/roads/<int:road_id>/status", methods=["PATCH"])
+@require_auth()
+def update_road_status(road_id):
+    payload = request.get_json() or {}
+    new_status = payload.get("roadType")
+    if new_status not in {"blocked", "unblocked"}:
+        return jsonify({"message": "roadType must be 'blocked' or 'unblocked'"}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text("UPDATE ROAD SET roadType = :rt WHERE roadID = :rid"),
+                {"rt": new_status, "rid": road_id},
+            )
+
+        if result.rowcount == 0:
+            return jsonify({"message": "Road not found"}), 404
+
+        return jsonify({"success": True, "roadType": new_status}), 200
+    except SQLAlchemyError as exc:
+        print("Error updating road status", exc)
+        return jsonify({"message": "Unable to update road"}), 500
+
 @webApp.route("/<int:user_id>/", methods=["GET"])
 @require_auth(enforce_user_match=True)
 def getProfileData(user_id):
@@ -878,6 +902,7 @@ def getProfileData(user_id):
 
             locations = fetch_locations(connection, user_id)
             routes = fetch_saved_routes(connection, user_id)
+            roads = fetch_roads(connection)
 
         user_payload = {
             "userID": user_row["userID"],
@@ -887,7 +912,7 @@ def getProfileData(user_id):
             "role": user_row["userRole"],
         }
 
-        return jsonify({"user": user_payload, "locations": locations, "savedRoutes": routes}), 200
+        return jsonify({"user": user_payload, "locations": locations, "savedRoutes": routes, "roads": roads}), 200
     except SQLAlchemyError as exc:
         print("Error loading profile", exc)
         return jsonify({"message": "Unable to load profile"}), 500
@@ -1021,6 +1046,93 @@ def update_admin_user_role(target_id):
     except SQLAlchemyError as exc:
         print("Error updating user role", exc)
         return jsonify({"message": "Unable to update role"}), 500
+
+
+@webApp.route("/admin/locations", methods=["GET"])
+@require_auth(required_role="admin")
+def admin_all_locations():
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT
+                        c.locationID AS "locationID",
+                        c.locationName AS "locationName",
+                        c.locationType AS "locationType",
+                        c.coordinate AS "coordinate",
+                        c.isPublic AS "isPublic",
+                        c.maxCapacity AS "maxCapacity",
+                        c.parkingSpaces AS "parkingSpaces",
+                        COALESCE(u.username, 'Unknown') AS "owner"
+                    FROM CELL c
+                    LEFT JOIN USERS u ON u.userID = c.createdBy
+                    ORDER BY c.locationID
+                    """
+                )
+            ).mappings().all()
+
+        payload = []
+        for row in rows:
+            payload.append({
+                "locationID": row["locationID"],
+                "locationName": row["locationName"],
+                "locationType": row["locationType"],
+                "coordinate": point_to_pair(row["coordinate"]),
+                "isPublic": bool(row["isPublic"]),
+                "maxCapacity": int(row["maxCapacity"] or 0),
+                "parkingSpaces": int(row["parkingSpaces"] or 0),
+                "owner": row["owner"],
+            })
+
+        return jsonify(payload), 200
+    except SQLAlchemyError as exc:
+        print("Error loading admin locations", exc)
+        return jsonify({"message": "Unable to load locations"}), 500
+
+
+@webApp.route("/admin/routes", methods=["GET"])
+@require_auth(required_role="admin")
+def admin_all_routes():
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT
+                        tr.routeID AS "routeID",
+                        tr.startCellCoord AS "startCellCoord",
+                        tr.endCellCoord AS "endCellCoord",
+                        tr.travelTime AS "travelTime",
+                        tr.totalDistance AS "totalDistance",
+                        tr.totalCost AS "totalCost",
+                        mot.transportType AS "transportType",
+                        COALESCE(u.username, 'Unknown') AS "owner"
+                    FROM TRAVEL_ROUTE tr
+                    LEFT JOIN USERS u ON u.userID = tr.storedBy
+                    LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
+                    ORDER BY tr.routeID DESC
+                    """
+                )
+            ).mappings().all()
+
+        payload = []
+        for row in rows:
+            payload.append({
+                "routeID": row["routeID"],
+                "owner": row["owner"],
+                "transportType": row["transportType"],
+                "startCellCoord": point_to_pair(row["startCellCoord"]),
+                "endCellCoord": point_to_pair(row["endCellCoord"]),
+                "totalDistance": row["totalDistance"],
+                "totalTime": row["travelTime"],
+                "totalCost": row["totalCost"],
+            })
+
+        return jsonify(payload), 200
+    except SQLAlchemyError as exc:
+        print("Error loading admin routes", exc)
+        return jsonify({"message": "Unable to load routes"}), 500
 
 
 @webApp.route("/admin/users/<int:target_id>", methods=["DELETE"])

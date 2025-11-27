@@ -10,7 +10,16 @@ import type {
   ComputePathRequest,
   ComputePathResponse,
   ModeOfTransport,
+  RouteSummary,
 } from '../types/models'
+import {
+  loadStoredRoutes,
+  persistStoredRoutes,
+  getPendingRouteSelection,
+  clearPendingRouteSelection,
+  type StoredRoute,
+  type SelectedRoutePayload,
+} from '../utils/routePersistence'
 
 const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
   speed: number
@@ -21,17 +30,6 @@ const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
   Bicycle: { speed: 18, costPerLeague: 0.2, description: 'Muscle-powered, zero emissions but slower pace' },
   Bus: { speed: 40, costPerLeague: 1.6, description: 'Shared transit, steady pace with low personal cost' },
   Walking: { speed: 5, costPerLeague: 0.0, description: 'Slowest option yet no cost and full flexibility' },
-}
-
-type RouteSummary = ComputePathResponse & {
-  mode: ModeOfTransport['transportType']
-  speed: number
-  costPerLeague: number
-  description: string
-}
-
-interface StoredRoute extends RouteSummary {
-  id: string
 }
 
 const generateRouteId = () => {
@@ -66,16 +64,27 @@ export default function MapView() {
   const [graphError, setGraphError] = useState<string | null>(null)
   const [isSavingRoute, setIsSavingRoute] = useState(false)
   const [routeSaveFeedback, setRouteSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [pendingSelection, setPendingSelection] = useState<SelectedRoutePayload | null>(null)
 
   const userId = authAPI.getCurrentUserId()
 
-  const handleRouteHistoryToggle = (routeId: string) => {
-    setRouteHistory((prev) => prev.filter(route => route.id !== routeId))
+  const updateRouteHistory = (updater: (prev: StoredRoute[]) => StoredRoute[]) => {
+    setRouteHistory((prev) => {
+      const next = updater(prev)
+      if (userId) {
+        persistStoredRoutes(userId, next)
+      }
+      return next
+    })
   }
 
-  const archiveRouteForOverlay = (route: RouteSummary | null) => {
+  const handleRouteHistoryToggle = (routeId: string) => {
+    updateRouteHistory((prev) => prev.filter(route => route.id !== routeId))
+  }
+
+  const archiveRouteForOverlay = (route: RouteSummary | null, routeRecordId?: number) => {
     if (!route) return
-    setRouteHistory((prev) => [...prev, { ...route, id: generateRouteId() }])
+    updateRouteHistory((prev) => [...prev, { ...route, id: generateRouteId(), routeRecordId }])
   }
 
   const FALLBACK_GRAPH: GraphResponse = {
@@ -159,6 +168,46 @@ export default function MapView() {
     }
   }, [userId])
 
+  useEffect(() => {
+    if (!userId) {
+      setRouteHistory([])
+      return
+    }
+    const stored = loadStoredRoutes(userId)
+    setRouteHistory(stored)
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId) {
+      setPendingSelection(null)
+      return
+    }
+    const selection = getPendingRouteSelection()
+    if (selection && selection.userId === userId) {
+      setPendingSelection(selection)
+    } else {
+      setPendingSelection(null)
+    }
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId || !pendingSelection) return
+    if (pendingSelection.userId !== userId) return
+    if (!routeHistory.length) return
+
+    const match = routeHistory.find(route => route.id === pendingSelection.storedRouteId)
+    if (match) {
+      setRouteSummary(match)
+      setComputedPath(match.path)
+      setKeepRouteVisible(true)
+    } else {
+      alert('This route overlay has not been cached on this device yet. Generate it once from the Map to store it locally.')
+    }
+
+    clearPendingRouteSelection()
+    setPendingSelection(null)
+  }, [userId, pendingSelection, routeHistory])
+
   const loadGraph = async () => {
     if (!userId) return
     try {
@@ -204,7 +253,7 @@ export default function MapView() {
       setSelectedLocation(null)
       setComputedPath(null)
       setRouteSummary(null)
-      setRouteHistory((prev) => prev.filter(route => !route.path.some(([x, y]) =>
+      updateRouteHistory((prev) => prev.filter(route => !route.path.some(([x, y]) =>
         x === target.coordinate[0] && y === target.coordinate[1]
       )))
       setKeepRouteVisible(false)
@@ -248,7 +297,7 @@ export default function MapView() {
     setIsSavingRoute(true)
     setRouteSaveFeedback(null)
     try {
-      await routeAPI.saveRoute(userId, {
+      const response = await routeAPI.saveRoute(userId, {
         transportType: routeSummary.mode,
         startCellCoord: start,
         endCellCoord: end,
@@ -257,6 +306,8 @@ export default function MapView() {
         totalCost: routeSummary.totalCost.toFixed(2),
         directions: routeSummary.directions,
       })
+      const routeRecordId = response.routeID
+      archiveRouteForOverlay(routeSummary, routeRecordId)
       setRouteSaveFeedback({ type: 'success', message: 'Route saved to your profile. Check the Profile tab to review it.' })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
@@ -314,8 +365,6 @@ export default function MapView() {
                 height: '600px',
                 width: '100%',
                 backgroundColor: '#fdf6e3',
-                backgroundImage: 'linear-gradient(#e0d7c5 1px, transparent 1px), linear-gradient(90deg, #e0d7c5 1px, transparent 1px)',
-                backgroundSize: '40px 40px',
               }}
             >
               
@@ -323,6 +372,8 @@ export default function MapView() {
                 isAddingLocation={isAddingLocation}
                 onMapClick={(coord) => setNewLocationCoord(snapToGrid(coord))}
               />
+
+              <GridOverlay />
 
               {/* Render stored roads */}
               {roads.map((road) => (
@@ -704,6 +755,26 @@ function LocationsList({
         </div>
       )}
     </div>
+  )
+}
+
+function GridOverlay({ spacing = 1, extent = 64 }: { spacing?: number; extent?: number }) {
+  const lines: Array<{ key: string; positions: [number, number][] }> = []
+  for (let coord = -extent; coord <= extent; coord += spacing) {
+    lines.push({ key: `v-${coord}`, positions: [[coord, -extent], [coord, extent]] })
+    lines.push({ key: `h-${coord}`, positions: [[-extent, coord], [extent, coord]] })
+  }
+
+  return (
+    <>
+      {lines.map((line) => (
+        <Polyline
+          key={line.key}
+          positions={line.positions}
+          pathOptions={{ color: '#e0d7c5', weight: 1, opacity: 0.6 }}
+        />
+      ))}
+    </>
   )
 }
 

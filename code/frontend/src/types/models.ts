@@ -111,7 +111,6 @@ export interface AuthResponse {
   role?: UserRole
 }
 
-export interface GraphResponse {
   locations: Location[]
   roads: Road[]
 }
@@ -142,6 +141,13 @@ export interface ComputePathResponse {
   closedAreas?: string[]
 }
 
+export interface RouteSummary extends ComputePathResponse {
+  mode: ModeOfTransport['transportType']
+  speed: number
+  costPerLeague: number
+  description: string
+}
+
 // Admin / analytics models
 export interface AdminOverview {
   totalUsers: number
@@ -168,4 +174,26 @@ export interface AdminActivity {
   type: 'sync' | 'mutation' | 'alert'
   severity: 'info' | 'warn' | 'critical'
   summary: string
+}
+
+export interface AdminLocationRecord {
+  locationID: number
+  locationName: string
+  locationType: Location['locationType']
+  coordinate: [number, number]
+  owner: string
+  isPublic: boolean
+  maxCapacity: number
+  parkingSpaces: number
+}
+
+export interface AdminRouteRecord {
+  routeID: number
+  owner: string
+  transportType: ModeOfTransport['transportType'] | null
+  startCellCoord: [number, number]
+  endCellCoord: [number, number]
+  totalDistance: string
+  totalTime: string
+  totalCost: string
 }
