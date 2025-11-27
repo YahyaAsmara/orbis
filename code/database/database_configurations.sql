@@ -12,7 +12,7 @@ CREATE TABLE USERS(
    registrationDate TEXT NOT NULL,
    username TEXT UNIQUE NOT NULL, --Must be unique
    userPassword TEXT NOT NULL,
-   -- userRole TEXT CHECK (userRole IN ('admin', 'mapper', 'viewer')) NOT NULL DEFAULT 'mapper',
+   userRole TEXT CHECK (userRole IN ('admin', 'mapper', 'viewer')) NOT NULL DEFAULT 'mapper',
    PRIMARY KEY (userID)
 );
 -----------------------------------------------------------

@@ -29,6 +29,9 @@ How to clean up the DB after use:
 Used in the context of Render. Allows this file to connect to the database via a URL and allows it to access a secret key.
 """
 import os
+import re
+from functools import wraps
+from typing import Optional
 
 """
 Uses SQLAlchemy to connect to the database
@@ -36,6 +39,7 @@ Imports create_engine as the main entry point into the DB
 Imports text to safely inject SQL code into the database
 """
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 """
 Import the Flask framework so it can be used.
@@ -44,7 +48,6 @@ Import jsonify so communications to the front-end are in the form of JSON.
 - JSON is used as this uses the REST standard and JSON is commonly used.
 Import session so that flask can manage sessions.
 """
-from flask import Flask, request, jsonify, session
 
 """
 Import LoginManager to help with handling log in functionality.
@@ -53,12 +56,8 @@ Import login_user to allow flask login to keep track of user logins.
 Import logout_user to allow flask login to handle user logouts.
 Import current_user to allow flask login to keep track of the current user
 """
-from flask_login import LoginManager, login_required, login_user, logout_user, current_user
-
-"""
-Import the User class so that User objects can be made.
-"""
-from .User import User
+from flask import Flask, request, jsonify, g
+from flask_cors import CORS
 
 """
 Import bcrypt to hash passwords.
@@ -78,13 +77,12 @@ Define length of tokens in hours
 """
 import jwt
 jwt_algo = "HS256"
-jwt_expire_mins = 60*2 #2 hour token
+jwt_expire_minutes = 60 * 2  # 2 hour token
 
 """
 Used for A* 
 """
 import heapq
-import math
 from collections import defaultdict
 
 """
@@ -94,12 +92,21 @@ Also gets the secret key used for Flask's sessions
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not set")
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is not set")
+
+db_engine = create_engine(DATABASE_URL)
+
 """
 Create a Flask instance of the current file.
 __name__ denotes the current file, value varies by whether this file is imported or ran directly.
 """
 webApp = Flask(__name__)
 webApp.secret_key = SECRET_KEY # Sets the secret key for flask to the one stored on Render
+CORS(webApp, resources={r"/*": {"origins": "*"}})
 
 """
 Creates a LoginManager instance and initializes it.
@@ -111,19 +118,12 @@ TODO: Determine how login will work with react
 
 #--Authentication API--
 """
-TODO: Maybe use? Depends on how user login sessions are handled
-"""
-@login_manager.user_loader
-def load_user(user_id):
-
-
-"""
 Helper function to hash passwords for security purposes
 """
 def hash_password(pwd):
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(pwd.encode('utf-8'), salt)
-    return hashed
+    return hashed.decode('utf-8')
 
 """
 Helper function to verify a stored password against one provided by the user
@@ -140,7 +140,7 @@ def verify_password(stored_pwd, provided_pwd):
 """
 Helper function to create a JWT access token for the given user ID
 """
-def create_access_token(userID: int) -> str:
+def create_access_token(userID: int, role: str) -> str:
     if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY is not set")
 
@@ -148,7 +148,8 @@ def create_access_token(userID: int) -> str:
     payload = {
         "sub": str(userID),  # subject
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(hours=jwt_expire_mins)).timestamp()),
+        "exp": int((now + timedelta(minutes=jwt_expire_minutes)).timestamp()),
+        "role": role,
     }
 
     return jwt.encode(payload, SECRET_KEY, algorithm=jwt_algo)
@@ -161,6 +162,187 @@ def decode_access_token(token: str) -> dict:
     if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY is not set")
     return jwt.decode(token, SECRET_KEY, algorithms=[jwt_algo])
+
+
+def get_db_connection():
+    return db_engine.connect()
+
+
+def point_to_pair(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return [float(value[0]), float(value[1])]
+
+    # psycopg may return a string representation like "(x,y)"
+    if isinstance(value, str):
+        numbers = re.findall(r"[-+]?\d*\.?\d+", value)
+        if len(numbers) >= 2:
+            return [float(numbers[0]), float(numbers[1])]
+
+    # memoryview from psycopg2 for POINT type
+    if hasattr(value, 'coords'):
+        coords = value.coords[0] if hasattr(value.coords, '__getitem__') else value.coords
+        return [float(coords[0]), float(coords[1])]
+
+    raise ValueError(f"Unable to parse coordinate value: {value}")
+
+
+def lseg_to_pair(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return [point_to_pair(value[0]), point_to_pair(value[1])]
+
+    if isinstance(value, str):
+        parts = re.findall(r"\(([^)]+)\)", value)
+        if len(parts) >= 2:
+            coords = []
+            for part in parts[:2]:
+                nums = re.findall(r"[-+]?\d*\.?\d+", part)
+                if len(nums) >= 2:
+                    coords.append([float(nums[0]), float(nums[1])])
+            if len(coords) == 2:
+                return coords
+
+    raise ValueError(f"Unable to parse line segment value: {value}")
+
+
+def fetch_locations(connection, user_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT locationID, coordinate, locationName, locationType, isPublic,
+                   maxCapacity, parkingSpaces, createdBy
+            FROM CELL
+            WHERE createdBy = :uid
+            ORDER BY locationID
+            """
+        ),
+        {"uid": user_id},
+    ).fetchall()
+
+    locations = []
+    for row in rows:
+        coord = point_to_pair(row.coordinate)
+        locations.append({
+            "locationID": row.locationID,
+            "coordinate": coord,
+            "locationName": row.locationName,
+            "locationType": row.locationType,
+            "isPublic": bool(row.isPublic),
+            "maxCapacity": int(row.maxCapacity or 0),
+            "parkingSpaces": int(row.parkingSpaces or 0),
+            "createdBy": row.createdBy,
+        })
+
+    return locations
+
+
+def fetch_roads(connection):
+    rows = connection.execute(
+        text(
+            """
+            SELECT roadID, roadSegment, roadName, distance, roadType
+            FROM ROAD
+            ORDER BY roadID
+            """
+        )
+    ).fetchall()
+
+    roads = []
+    for row in rows:
+        segment = lseg_to_pair(row.roadSegment)
+        roads.append({
+            "roadID": row.roadID,
+            "roadSegment": segment,
+            "roadName": row.roadName,
+            "distance": float(row.distance),
+            "roadType": row.roadType,
+        })
+
+    return roads
+
+
+def fetch_saved_routes(connection, user_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT routeID, storedBy, modeOfTransportID, startCellCoord, endCellCoord,
+                   travelTime, totalDistance, totalCost, directions
+            FROM TRAVEL_ROUTE
+            WHERE storedBy = :uid
+            ORDER BY routeID DESC
+            """
+        ),
+        {"uid": user_id},
+    ).fetchall()
+
+    routes = []
+    for row in rows:
+        directions = row.directions if isinstance(row.directions, list) else []
+        routes.append({
+            "routeID": row.routeID,
+            "storedBy": row.storedBy,
+            "modeOfTransportID": row.modeOfTransportID,
+            "startCellCoord": point_to_pair(row.startCellCoord),
+            "endCellCoord": point_to_pair(row.endCellCoord),
+            "travelTime": row.travelTime,
+            "totalDistance": row.totalDistance,
+            "totalCost": row.totalCost,
+            "directions": directions,
+        })
+
+    return routes
+
+
+def require_auth(required_role: str | None = None, enforce_user_match: bool = False):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header.startswith('Bearer '):
+                return jsonify({"message": "Missing or invalid Authorization header"}), 401
+
+            token = auth_header.split(' ', 1)[1].strip()
+            try:
+                payload = decode_access_token(token)
+            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                return jsonify({"message": "Invalid or expired token"}), 401
+
+            user_id = int(payload.get('sub'))
+            with get_db_connection() as connection:
+                row = connection.execute(
+                    text("SELECT userID, username, email, userRole FROM USERS WHERE userID = :uid"),
+                    {"uid": user_id},
+                ).fetchone()
+
+            if row is None:
+                return jsonify({"message": "User not found"}), 401
+
+            role = row.userRole
+            if required_role and role != required_role:
+                return jsonify({"message": "Forbidden"}), 403
+
+            if enforce_user_match:
+                path_user = kwargs.get('user_id') or request.view_args.get('user_id')
+                if path_user is not None and int(path_user) != user_id:
+                    return jsonify({"message": "Forbidden"}), 403
+
+            g.current_user = {
+                "user_id": user_id,
+                "username": row.username,
+                "email": row.email,
+                "role": role,
+            }
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 """
 Function that runs when the user attempts to create an account
@@ -193,49 +375,49 @@ def createAccount():
             "message": "Username must be at least 3 characters in length."
         }), 400
 
-    #hash password
     pwd_hash = hash_password(password)
-    reg_date = datetime.utcnow().date()
+    reg_date = datetime.utcnow().date().isoformat()
+    default_role = "mapper"
 
-    #Connect to DB
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-
-    #Add entry in DB for user
     try:
-        existing = connection_to_db.execute(
-            text("""
-                SELECT 1
-                FROM USERS
-                WHERE email = :email OR username = :username
-                """),
-            {"email": email, "username": username}
-        ).fetchone()
+        with db_engine.begin() as connection:
+            existing = connection.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM USERS
+                    WHERE email = :email OR username = :username
+                    """
+                ),
+                {"email": email, "username": username},
+            ).fetchone()
 
-        if existing is not None:
-            return jsonify({
-                "success": False,
-                "message": "Email or username already in use"
-            }), 409
+            if existing is not None:
+                return jsonify({
+                    "success": False,
+                    "message": "Email or username already in use"
+                }), 409
 
-        result = connection_to_db.execute(
-            text("""
-                INSERT INTO USERS (email, username, password, registrationDate)
-                VALUES (:email, :username, :pwd_hash, :reg_date)
-                RETURNING userID
-                """),
-            {
-                "email": email,
-                "username": username,
-                "pwd_hash": pwd_hash,
-                "reg_date": reg_date
-            }
-        )
-        user_id = result.fetchone()[0]
-        connection_to_db.commit()
+            result = connection.execute(
+                text(
+                    """
+                    INSERT INTO USERS (email, username, userPassword, registrationDate, userRole)
+                    VALUES (:email, :username, :pwd_hash, :reg_date, :role)
+                    RETURNING userID, userRole
+                    """
+                ),
+                {
+                    "email": email,
+                    "username": username,
+                    "pwd_hash": pwd_hash,
+                    "reg_date": reg_date,
+                    "role": default_role,
+                },
+            ).fetchone()
 
-        #issue access token
-        access_token = create_access_token(user_id)
+        user_id = result.userID
+        role = result.userRole
+        access_token = create_access_token(user_id, role)
 
         return jsonify({
             "success": True,
@@ -244,20 +426,17 @@ def createAccount():
                 "user_id": user_id,
                 "username": username,
                 "email": email,
+                "role": role,
                 "token": access_token
             }
 
         }), 201
-    except Exception as e:
-        connection_to_db.rollback()
-        #TODO: maybe return e as well but for now just print in terminal
+    except SQLAlchemyError as e:
         print("Error: ", e)
         return jsonify({
-            "succes": False,
+            "success": False,
             "message": "Internal server error"
         }), 500
-    finally:
-        connection_to_db.close()
     #TODO: Add entry in DB for user graph, copy it from some defaults value table OR if you want to store the default graph somewhere else, grab it and put it in the user's entry
 
 """
@@ -276,38 +455,39 @@ def signIn():
             "message": "Missing username or password"
         }), 400
 
-    #connect to db
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-
     try:
-        result = connection_to_db.execute(
-            text("""
-            SELECT userID, username, email, password
-            FROM USERS
-            WHERE username = :username
-            """),
-            {"username": username}
-        )
+        with get_db_connection() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    SELECT userID, username, email, userPassword, userRole
+                    FROM USERS
+                    WHERE username = :username
+                    """
+                ),
+                {"username": username},
+            )
 
-        user_row = result.fetchone()
+            user_row = result.fetchone()
+
         if user_row is None:
             return jsonify({
                 "success": False,
                 "message": "Username or password is incorrect."
             }), 401
 
-        user_id, username, email, pwd_hash = user_row
+        user_id = user_row.userID
+        email = user_row.email
+        pwd_hash = user_row.userPassword
+        role = user_row.userRole
 
-        #verify password
         if not verify_password(pwd_hash, password):
             return jsonify({
                 "success": False,
                 "message": "Invalid password."
             }), 401
 
-        #valid credentials so issue jwt token
-        access_token = create_access_token(user_id)
+        access_token = create_access_token(user_id, role)
 
         return jsonify({
             "success": True,
@@ -316,86 +496,31 @@ def signIn():
                 "user_id": user_id,
                 "username": username,
                 "email": email,
+                "role": role,
                 "token": access_token
             }
         }), 200
 
-    except Exception as e:
-        #TODO: maybe return e as well but for now print in terminal
+    except SQLAlchemyError as e:
         print("Error: ", e)
         return jsonify({
             "success": False,
             "message": "Internal server error"
         }), 500
-    finally:
-        connection_to_db.close()
 #----------------------
 
 #--API Methods for Frontend--
-"""
-Returns a specified user's graph
-PARAMS
-- user_id => The user ID whose graph will be returned
-"""
-@webApp.route("/<user_id>/getGraph", methods = ["GET"])
+@webApp.route("/<int:user_id>/getGraph", methods=["GET"])
+@require_auth(enforce_user_match=True)
 def getGraph(user_id):
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
-
-    #--Input checks--
     try:
-        user_id = int(user_id) #Check if the ID is an integer
-        if user_id < 1: raise Exception #Check if the ID is valid
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        connection_to_db.close()
-        if len(table) == 0: raise Exception
-    except: #Tell the frontend that the backend rejected its input
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #----------------
-
-    result_for_frontend = {#Formats a dictionary that'll be JSONified for the frontend
-        "roads" : {},
-    }
-    
-    #--Grab all roads from the DB and populate the dictionary with it--
-    db_output = connection_to_db.execute(text("SELECT * FROM ROAD"))
-    table = db_output.fetchall() #Get the entire table
-
-    for row in table: #row = (roadID, roadSegment, roadName, distance, roadType)
-        result_for_frontend["roads"][row[1]] = { #row[1] = [(x1,y1),(x2,y2)]
-            "roadID" : row[0],
-            "roadName" : row[2],
-            "distance" : row[3],
-            "roadType" : row[4]
-        }
-    #------------------------------------------------------------------
-
-    #--Grab all locations from the DB and populate the dictionary with it--
-    db_output = connection_to_db.execute(text("SELECT * FROM CELL WHERE createdBy = :user_id"), {"user_id" : user_id})
-    table = db_output.fetchall() #Get the entire table
-
-    for row in table: #row = (locationID, coordinate, locationName, locationType, isPublic, maxCapacity, parkingSpaces, createdBy)
-        if result_for_frontend["user_locations"] == None: #No user created locations have been logged yet
-            result_for_frontend["user_locations"] = {} #Create an entry in the dictionary to hold user created locations
-        
-        result_for_frontend["user_locations"][row[1]] = { #row[1] = (x,y) 
-            "locationID" : row[0],
-            "locationName" : row[2],
-            "locationType" : row[3],
-            "isPublic" : row[4],
-            "maxCapacity" : row[5],
-            "parkingSpaces" : row[6],
-        }
-    #----------------------------------------------------------------------
-
-    #--Close the DB connection--
-    connection_to_db.close()
-    #---------------------------
-
-    return jsonify(result_for_frontend), 200 #Return the dictionary to the front end
+        with get_db_connection() as connection:
+            locations = fetch_locations(connection, user_id)
+            roads = fetch_roads(connection)
+        return jsonify({"locations": locations, "roads": roads}), 200
+    except (ValueError, SQLAlchemyError) as exc:
+        print("Error loading graph", exc)
+        return jsonify({"message": "Failed to load user graph"}), 500
 
 """
 Updates a specified user's graph with a location
@@ -403,157 +528,41 @@ PARAMS
 - user_id => The user ID whose graph will be updated
 - The frontend will send a form with important information as to the new location details (name, coordinates, capacity, etc)
 """
-@webApp.route("/<user_id>/addLocation", methods = ["POST"])
+@webApp.route("/<int:user_id>/addLocation", methods=["POST"])
+@require_auth(enforce_user_match=True)
 def addLocation(user_id):
-    #--Grab form information--
-    coordinate = request.form["coordinate"]
-    locationName = request.form["locationName"]
-    locationType = request.form["locationType"]
-    isPublic = request.form["isPublic"]
-    maxCapacity = request.form["maxCapacity"]
-    parkingSpaces = request.form["parkingSpaces"]
-    acceptedCurrency = request.form["acceptedCurrency"]
-    #-------------------------
+    payload = request.get_json() or {}
+    coordinate = payload.get("coordinate")
+    if not coordinate or len(coordinate) != 2:
+        return jsonify({"message": "coordinate is required"}), 400
 
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
-
-    #--Validate form information--
-    #----user_id----
     try:
-        user_id = int(user_id)
-        if user_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #---------------
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    INSERT INTO CELL (coordinate, locationName, locationType, isPublic,
+                                      maxCapacity, parkingSpaces, createdBy)
+                    VALUES (point(:x, :y), :name, :type, :public, :capacity, :parking, :uid)
+                    RETURNING locationID
+                    """
+                ),
+                {
+                    "x": coordinate[0],
+                    "y": coordinate[1],
+                    "name": payload.get("locationName"),
+                    "type": payload.get("locationType"),
+                    "public": bool(payload.get("isPublic")),
+                    "capacity": payload.get("maxCapacity", 0),
+                    "parking": payload.get("parkingSpaces", 0),
+                    "uid": user_id,
+                },
+            ).fetchone()
 
-    #----coordinate----
-    try:
-        coordinate_x = coordinate[0]
-        coordinate_y = coordinate[1]
-
-        db_output = connection_to_db.execute(text("SELECT roadSegment FROM ROAD"))
-        table = db_output.fetchall() #Get the entire table
-        location_is_not_valid = True
-        for row in table: #row = [(x1,y1),(x2,y2)] 
-            end_1_x = row[0][0]
-            end_1_y = row[0][1]
-            end_2_x = row[1][0]
-            end_2_y = row[1][1]
-
-            location_in_end_1 = end_1_x == coordinate_x and end_1_y == coordinate_y
-            location_in_end_2 = end_2_x == coordinate_x and end_2_y = coordinate_y
-            if location_in_end_1 or location_in_end_2: 
-                location_is_not_valid = False
-                break
-        if location_is_not_valid: raise Exception
-
-        db_output = connection_to_db.execute(text("SELECT * FROM CELL WHERE coordinate = '(:coordinate_x, :coordinate_y)' AND createdBy = :user_id"), {"coordinate_x" : coordinate_x, "coordinate_y" : coordinate_y, "user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if not(len(table) == 0): raise Exception #A location already exists
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed location coordinates"}), 400
-    #------------------
-
-    #----locationName----
-    try:
-        allowed_symbols = set(string.ascii_letters + string.digits) # Constructs a set filled with alphanumeric symbols
-        locationName_contains_invalid_symbols = any(character not in allowed_symbols for character in locationName)
-        if locationName_contains_invalid_symbols: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Non-alphanumeric location name"}), 400
-    #--------------------
-
-    #---locationType----
-    if locationType not in ["Hotel", "Park", "Cafe", "Restaurant", "Landmark", "Gas_Station", "Electric_Charging_Station"]:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Invalid location type"}), 400
-    #-------------------
-
-    #----isPublic----
-    try:
-        if not (isPublic == True or isPublic == False): raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Location neither public nor private"}), 400 
-    #----------------
-
-    #----parkingSpaces----
-    try:
-        parkingSpaces = int(parkingSpaces)
-        if parkingSpaces < 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Number of parking spaces invalid"}), 400 
-    #---------------------
-
-    #----acceptedCurrency----
-    if not (acceptedCurrency == None): #There is a currency given for this location
-        for currency in acceptedCurrency: #Check each given currency in the list
-            db_output = connection_to_db.execute(text("SELECT * FROM CURRENCY WHERE currencyName = :currency"), {"currency" : currency})
-            table = db_output.fetchall() #Get the entire table
-            if not (len(table) == 1): return jsonify({"error_message" : f"Invalid currency: {currency}"}), 400 
-    #------------------------
-    #-----------------------------
-
-    #--Insert a new location into the database--
-    db_output = connection_to_db.execute(text(
-        """
-        INSERT INTO CELL (coordinate, locationName, locationType, isPublic, maxCapacity, parkingSpaces, createdBy) 
-        VALUES (:coordinate, :locationName, :locationType, :isPublic, :maxCapacity, :parkingSpaces, :createdBy) 
-        RETURNING locationID
-        """
-    ), {
-        "coordinate" : f'{coordinate}',
-        "locationName" : locationName,
-        "locationType" : locationType,
-        "isPublic" : isPublic,
-        "maxCapacity" : maxCapacity,
-        "parkingSpaces" : parkingSpaces,
-        "createdBy" : user_id
-    })
-    table = db_output.fetchall() #Get the entire table
-    location_id = table[0][0] #table = [(locationID)]
-
-    if acceptedCurrency != None: #User gave a currency for this location to accept
-        for currency in acceptedCurrency: #Add a relationship between each currency and location
-            connection_to_db.execute(text("INSERT INTO ACCEPTS (currencyName, locationID) VALUES (:currency, :locationID)"), {
-                "currency" : currency,
-                "locationID" : location_id
-            })
-    
-    #Add a CONNECTS_TO relationship between all roads that connect to this location
-    db_output = connection_to_db.execute(text(
-        """
-        SELECT roadID from ROAD 
-        WHERE (roadSegment)[0] = :coordinate::point OR (roadSegment)[1] = :coordinate::point
-        """
-    ), {"coordinate" : f'{coordinate}'})
-    table = db_output.fetchall() #Get the entire table
-    for row in table: #table = [[roadID], [roadID], ...]
-        road_id = row[0]
-        connection_to_db.execute(text(
-            """
-            INSERT INTO CONNECTS_TO (roadID, locationID) 
-            VALUES (:road_id, :locationID) 
-            """
-        ), {"road_id" : road_id, "locationID" : location_id})
-    #-------------------------------------------
-
-    #--Close the DB connection--
-    connection_to_db.commit() #Commit the changes made to the DB
-    connection_to_db.close()
-    #---------------------------
-    
-    return jsonify("success" : True), 200
+        return jsonify({"success": True, "locationID": result.locationID}), 201
+    except SQLAlchemyError as exc:
+        print("Error adding location", exc)
+        return jsonify({"message": "Unable to add location"}), 500
 
 """
 Updates a specified user's graph by removing a location
@@ -561,52 +570,25 @@ PARAMS
 - user_id => The user ID whose graph will be updated
 - The frontend will send a form/JSON with the coordinates of what location to remove
 """
-@webApp.route("/<user_id>/removeLocation", methods = ["POST"])
+@webApp.route("/<int:user_id>/removeLocation", methods=["DELETE"])
+@require_auth(enforce_user_match=True)
 def removeLocation(user_id):
-    #--Grab form information--
-    coordinate = request.form["coordinate"]
-    #-------------------------
+    payload = request.get_json() or {}
+    location_id = payload.get("locationID")
+    if not location_id:
+        return jsonify({"message": "locationID is required"}), 400
 
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
-
-    #--Validate form information--
-    #----user_id----
     try:
-        user_id = int(user_id)
-        if user_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #---------------
+        with db_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
+                {"lid": location_id, "uid": user_id},
+            )
 
-    #----coordinate----
-    try:
-        coordinate_x = coordinate[0]
-        coordinate_y = coordinate[1]
-
-        db_output = connection_to_db.execute(text("SELECT * FROM CELL WHERE coordinate = '(:coordinate_x, :coordinate_y)' AND createdBy = :user_id"), {"coordinate_x" : coordinate_x, "coordinate_y" : coordinate_y, "user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if not(len(table) == 1): raise Exception #Location does not exist
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed location coordinates"}), 400
-    #------------------
-    #-----------------------------
-
-    connection_to_db.execute(text("DELETE FROM CELL WHERE coordinate = '(:coordinate_x, :coordinate_y)' AND createdBy = :user_id"), {"coordinate_x" : coordinate_x, "coordinate_y" : coordinate_y, "user_id" : user_id})
-
-    #--Close the DB connection--
-    connection_to_db.commit() #Commit the changes made to the DB
-    connection_to_db.close()
-    #---------------------------
-
-    return jsonify("success" : True), 200
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error removing location", exc)
+        return jsonify({"message": "Unable to remove location"}), 500
 
 """
 Updates a specified user's graph by updating a location
@@ -614,422 +596,311 @@ PARAMS
 - user_id => The user ID whose graph will be updated
 - The frontend will send a form/JSON with the coordinates of what location to update, alongside all location-based information
 """
-@webApp.route("/<user_id>/updateLocation", methods = ["POST"])
+@webApp.route("/<int:user_id>/updateLocation", methods=["PUT"])
+@require_auth(enforce_user_match=True)
 def updateLocation(user_id):
-    #--Grab form information--
-    coordinate = request.form["coordinate"]
-    locationName = request.form["locationName"]
-    locationType = request.form["locationType"]
-    isPublic = request.form["isPublic"]
-    maxCapacity = request.form["maxCapacity"]
-    parkingSpaces = request.form["parkingSpaces"]
-    acceptedCurrency = request.form["acceptedCurrency"]
-    #-------------------------
+    payload = request.get_json() or {}
+    location_id = payload.get("locationID")
+    if not location_id:
+        return jsonify({"message": "locationID is required"}), 400
 
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
+    fields = {
+        "locationName": payload.get("locationName"),
+        "locationType": payload.get("locationType"),
+        "isPublic": payload.get("isPublic"),
+        "maxCapacity": payload.get("maxCapacity"),
+        "parkingSpaces": payload.get("parkingSpaces"),
+    }
+    coordinate = payload.get("coordinate")
+    assignments = []
+    params = {"locationID": location_id, "uid": user_id}
 
-    location_id = None #For use in updating the right row later
+    for column, value in fields.items():
+        if value is not None:
+            assignments.append(f"{column} = :{column}")
+            params[column] = value
 
-    #--Validate form information--
-    #----user_id----
+    if coordinate and len(coordinate) == 2:
+        assignments.append("coordinate = point(:coord_x, :coord_y)")
+        params["coord_x"], params["coord_y"] = coordinate
+
+    if not assignments:
+        return jsonify({"message": "No fields to update"}), 400
+
+    query = "UPDATE CELL SET " + ", ".join(assignments) + " WHERE locationID = :locationID AND createdBy = :uid"
+
     try:
-        user_id = int(user_id)
-        if user_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #---------------
+        with db_engine.begin() as connection:
+            connection.execute(text(query), params)
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error updating location", exc)
+        return jsonify({"message": "Unable to update location"}), 500
 
-    #----coordinate----
-    try:
-        coordinate_x = coordinate[0]
-        coordinate_y = coordinate[1]
-
-        db_output = connection_to_db.execute(text("SELECT locationID FROM CELL WHERE coordinate = '(:coordinate_x, :coordinate_y)' AND createdBy = :user_id"), {"coordinate_x" : coordinate_x, "coordinate_y" : coordinate_y, "user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if not(len(table) == 1): raise Exception #Location does not exist
-        location_id = table[0][0] #table = [(locationID)]
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed location coordinates"}), 400
-    #------------------
-
-    #----locationName----
-    try:
-        allowed_symbols = set(string.ascii_letters + string.digits) # Constructs a set filled with alphanumeric symbols
-        locationName_contains_invalid_symbols = any(character not in allowed_symbols for character in locationName)
-        if locationName_contains_invalid_symbols: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Non-alphanumeric location name"}), 400
-    #--------------------
-
-    #---locationType----
-    if locationType not in ["Hotel", "Park", "Cafe", "Restaurant", "Landmark", "Gas_Station", "Electric_Charging_Station"]:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Invalid location type"}), 400
-    #-------------------
-
-    #----isPublic----
-    try:
-        if not (isPublic == True or isPublic == False): raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Location neither public nor private"}), 400 
-    #----------------
-
-    #----parkingSpaces----
-    try:
-        parkingSpaces = int(parkingSpaces)
-        if parkingSpaces < 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Number of parking spaces invalid"}), 400 
-    #---------------------
-
-    #----acceptedCurrency----
-    if not (acceptedCurrency == None): #There is a currency given for this location
-        for currency in acceptedCurrency: #Check each given currency in the list
-            db_output = connection_to_db.execute(text("SELECT * FROM CURRENCY WHERE currencyName = :currency"), {"currency" : currency})
-            table = db_output.fetchall() #Get the entire table
-            if not (len(table) == 1): return jsonify({"error_message" : f"Invalid currency: {currency}"}), 400 
-    #------------------------
-    #-----------------------------
-
-    #--Update the location with new information--
-    connection_to_db.execute(text(
-        """
-        UPDATE CELL
-        SET coordinate = :coordinate, locationName = :locationName, locationType = :locationType, isPublic = :isPublic, maxCapacity = :maxCapacity, parkingSpaces = :parkingSpaces, createdBy = :user_id
-        WHERE locationID = :location_id
-        """
-    ), {
-        "coordinate" : f'{coordinate}',
-        "locationName" : locationName,
-        "locationType" : locationType,
-        "isPublic" : isPublic,
-        "maxCapacity" : maxCapacity,
-        "parkingSpaces" : parkingSpaces,
-        "createdBy" : user_id,
-        "locationID" : location_id
-    })
-
-    #--Remove all relationships in ACCEPTS for this cell--
-    connection_to_db.execute(text("DELETE * FROM ACCEPTS WHERE locationID = :location_id"), {"location_id" : location_id})
-    #-----------------------------------------------------
-
-    #--Repopulate ACCEPTS relationships between currency and location--
-    if acceptedCurrency != None: #User gave a currency for this location to accept
-        for currency in acceptedCurrency: #Add a relationship between each currency and location
-            connection_to_db.execute(text("INSERT INTO ACCEPTS (currencyName, locationID) VALUES (:currency, :locationID)"), {
-                "currency" : currency,
-                "locationID" : location_id
-            })
-    #------------------------------------------------------------------
-    #--------------------------------------------
-    
-    #--Close the DB connection--
-    connection_to_db.commit() #Commit the changes made to the DB
-    connection_to_db.close()
-    #---------------------------
-
-    return jsonify("success" : True), 200
-
-"""
-Updates a specified user's graph with a landmark
-PARAMS
-- user_id => The user ID whose graph will be updated
-- The frontend will send a form with important information as to the new landmark details
-"""
-@webApp.route("/<user_id>/addLandmark", methods = ["POST"])
-def addLandmark(user_id):
-    #Input check, ensure that the new landmark is valid (information is valid, nothing overlaps with graph from DB, etc)
-    ##If input failed check, tell front end it was not successful
-    #Update DB graph entry with new landmark
-    #Tell front end it was successful
-
-"""
-Updates a specified user's graph by removing a landmark
-PARAMS
-- user_id => The user ID whose graph will be updated
-- The frontend will send a form/JSON with what landmark to remove
-"""
-@webApp.route("/<user_id>/removeLandmark", methods = ["POST"])
-def removeLandmark(user_id):
-    #Input check, ensure that the user id and landmark is valid (exists)
-    ##If input failed check, tell front end it was not successful
-    #Update DB by removing the landmark
-    #Tell front end it was successful
-
-"""
-Updates a specified user's graph by updating a landmark
-PARAMS
-- user_id => The user ID whose graph will be updated
-- The frontend will send a form/JSON with what landmark to update, alongside all landmark-based information
-"""
-@webApp.route("/<user_id>/updateLandmark", methods = ["POST"])
-def updateLandmark(user_id):
-    #Input check, ensure that the user id and landmark info  valid
-    ##If input failed check, tell front end it was not successful
-    #Update DB
-    #Tell front end it was successful
-
-"""
-Removes a user's saved path
-PARAMS
-- routeID -> ID of saved path to remove
-"""
-@webApp.route("/<user_id>/removeSavedPath", methods = ["POST"])
+@webApp.route("/<int:user_id>/removeSavedPath", methods=["POST"])
+@require_auth(enforce_user_match=True)
 def removeSavedPath(user_id):
-    #--Grab form information--
-    route_id = request.form["routeID"]
-    #-------------------------
+    payload = request.get_json() or {}
+    route_id = payload.get("routeID")
+    if not route_id:
+        return jsonify({"message": "routeID is required"}), 400
 
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
-
-    #--Validate form information--
-    #----user_id----
     try:
-        user_id = int(user_id)
-        if user_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #---------------
+        with db_engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM TRAVEL_ROUTE WHERE routeID = :rid AND storedBy = :uid"),
+                {"rid": route_id, "uid": user_id},
+            )
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error removing saved path", exc)
+        return jsonify({"message": "Unable to remove saved route"}), 500
 
-    #----route_id----
-    try:
-        route_id = int(route_id)
-        if route_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM TRAVEL_ROUTE WHERE routeID = :route_id AND storedBy = :user_id"), {"route_id" : route_id, "user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed route ID"}), 400
-    #----------------
-    #----End of form validation---
-
-    #--Delete saved path--
-    connection_to_db.execute(text(
-        """
-        DELETE FROM TRAVEL_ROUTE
-        WHERE
-        routeID = : route_id;
-        """
-    ), {"route_id" : route_id})
-    #---------------------
-
-    #--Close the DB connection--
-    connection_to_db.commit() #Commit the changes made to the DB
-    connection_to_db.close()
-    #---------------------------
-    
-    return jsonify("success" : True), 200
-
-"""
-Sends the front end information about the user specified route, given the provided information (in JSON or a form)
-- user_id
-- Starting location
-- Ending location
-- List of pitt stops
-- Time of day
-- Chosen mode of transport
-- TODO: etc... (if I'm missing something)
-"""
-@webApp.route("/<user_id>/computePath", methods = ["GET"])
+@webApp.route("/<int:user_id>/computePath", methods=["POST"])
+@require_auth(enforce_user_match=True)
 def computePath(user_id):
-    #Input check, ensure everything given from front end makes sense
-    ##If not, reject
+    payload = request.get_json() or {}
+    start = payload.get("startCoord")
+    end = payload.get("endCoord")
+    pit_stops = payload.get("pitStops", [])
 
-    #Call A* search and pass relevant info. Get the shortest path back
-    #Call getRouteInformation and pass the shortest path
+    if not start or not end:
+        return jsonify({"message": "startCoord and endCoord are required"}), 400
 
-    #Get the results from the above function calls and put them in a nice and easy to parse (JSON?) format for the front end
-    #Send to the front end
+    try:
+        with get_db_connection() as connection:
+            adjacency, _ = build_road_graph(connection)
 
-"""
-Saves a user-specified route
-PARAMS:
-- modeOfTransportID
-- startCellCoord -> As a tuple (x,y)
-- endCellCoord -> As a tuple (x,y)
-- travelTime -> As a string
-- totalDistance -> As a string
-- totalCost -> As a string
-- directions -> As a list of strings
-"""
-@webApp.route("/<user_id>/saveRoute", methods = ["POST"])
+        path, total_distance = aStarSearch(user_id, start, end, pit_stops, adjacency)
+        if path is None:
+            return jsonify({"message": "No path found", "path": []}), 404
+
+        path_list = [[coord[0], coord[1]] for coord in path]
+        summary = {
+            "path": path_list,
+            "totalDistance": total_distance,
+            "totalTime": total_distance,
+            "totalCost": 0,
+            "directions": [f"Proceed to {pt}" for pt in path_list],
+            "closedAreas": [],
+        }
+        return jsonify(summary), 200
+    except (ValueError, SQLAlchemyError) as exc:
+        print("Error computing path", exc)
+        return jsonify({"message": "Unable to compute path"}), 500
+
+@webApp.route("/<int:user_id>/saveRoute", methods=["POST"])
+@require_auth(enforce_user_match=True)
 def saveRoute(user_id):
-    #--Grab form information--
-    modeOfTransportID = request.form["modeOfTransportID"]
-    startCellCoord = request.form["startCellCoord"]
-    endCellCoord = request.form["endCellCoord"]
-    travelTime = request.form["travelTime"]
-    totalDistance = request.form["totalDistance"]
-    totalCost = request.form["totalCost"]
-    directions = request.form["directions"]
-    #-------------------------
+    payload = request.get_json() or {}
+    start = payload.get("startCellCoord")
+    end = payload.get("endCellCoord")
+    if not start or not end:
+        return jsonify({"message": "startCellCoord and endCellCoord are required"}), 400
 
-    #--Set up a connection with the database--
-    db_engine = create_engine(DATABASE_URL)
-    connection_to_db = db_engine.connect()
-    #-----------------------------------------
-
-    #--Validate form information--
-    #----user_id----
     try:
-        user_id = int(user_id)
-        if user_id < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM USERS WHERE userID = :user_id"), {"user_id" : user_id})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed user ID"}), 400
-    #---------------
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    INSERT INTO TRAVEL_ROUTE (
+                        storedBy, modeOfTransportID, startCellCoord, endCellCoord,
+                        travelTime, totalDistance, totalCost, directions
+                    ) VALUES (
+                        :storedBy, :mode, point(:sx, :sy), point(:ex, :ey),
+                        :travelTime, :totalDistance, :totalCost, :directions
+                    )
+                    RETURNING routeID
+                    """
+                ),
+                {
+                    "storedBy": user_id,
+                    "mode": payload.get("modeOfTransportID", 1),
+                    "sx": start[0],
+                    "sy": start[1],
+                    "ex": end[0],
+                    "ey": end[1],
+                    "travelTime": payload.get("travelTime", ""),
+                    "totalDistance": payload.get("totalDistance", ""),
+                    "totalCost": payload.get("totalCost", ""),
+                    "directions": payload.get("directions", []),
+                },
+            ).fetchone()
 
-    #----modeOfTransportID----
+        return jsonify({"success": True, "routeID": result.routeID}), 201
+    except SQLAlchemyError as exc:
+        print("Error saving route", exc)
+        return jsonify({"message": "Unable to save route"}), 500
+
+
+@webApp.route("/<int:user_id>/savedRoutes", methods=["GET"])
+@require_auth(enforce_user_match=True)
+def getSavedRoutes(user_id):
     try:
-        modeOfTransportID = int(modeOfTransportID)
-        if modeOfTransportID < 1: raise Exception
-        db_output = connection_to_db.execute(text("SELECT * FROM MODE_OF_TRANSPORT WHERE transportID = :modeOfTransportID"), {"modeOfTransportID" : modeOfTransportID})
-        table = db_output.fetchall() #Get the entire table
-        if len(table) == 0: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : "Malformed mode of transport ID"}), 400
-    #-------------------------
+        with get_db_connection() as connection:
+            routes = fetch_saved_routes(connection, user_id)
+        return jsonify(routes), 200
+    except SQLAlchemyError as exc:
+        print("Error loading saved routes", exc)
+        return jsonify({"message": "Unable to fetch saved routes"}), 500
 
-    #----startCellCoord and endCellCoord----
-    startCell_not_valid = True
-    endCell_not_valid = True
-    try:
-        db_output = connection_to_db.execute(text("SELECT roadSegment FROM ROAD"))
-        table = db_output.fetchall() #Get the entire table
-        for row in table: #row = [(x1,y1),(x2,y2)] 
-            end_1 = row[0]
-            end_2 = row[1]
-
-            startCell_in_map = startCellCoord == end_1 or startCellCoord == end_2
-            endCell_in_map = endCellCoord == end_1 or endCellCoord == end_2
-
-            if startCell_in_map: startCell_not_valid = False
-            if endCell_in_map: endCell_not_valid = False
-            if not startCell_not_valid and not endCell_not_valid: break #To end the loop early
-        if startCell_not_valid or endCell_not_valid: raise Exception
-    except:
-        connection_to_db.close()
-        return jsonify({"error_message" : f"Malformed coordinates: {"startCell" if startCell_not_valid else ""} {"endCell" if endCell_not_valid else ""}"}), 400
-    #---------------------------------------
-
-    #----travelTime, totalDistance, totalCost, directions----
-    try:
-        allowed_symbols = set(string.ascii_letters + string.digits) # Constructs a set filled with alphanumeric symbols
-
-        travelTime_has_bad_symbols = any(character not in allowed_symbols for character in travelTime)
-        totalDistance_has_bad_symbols = any(character not in allowed_symbols for character in totalDistance)
-        totalCost_has_bad_symbols = any(character not in allowed_symbols for character in totalCost)
-        directions_has_bad_symbols = False
-        for direction in directions: #Checks every direction step in the list of directions 
-            if any(character not in allowed_symbols for character in direction): directions_has_bad_symbols = True #Specific direction in the list is invalid
-        
-        if travelTime_has_bad_symbols or totalDistance_has_bad_symbols or totalCost_has_bad_symbols or directions_has_bad_symbols:
-            error_message = f"""
-            Invalid 
-            {"travel time " if travelTime_has_bad_symbols}
-            {"total distance " if totalDistance_has_bad_symbols}
-            {"total cost " if totalCost_has_bad_symbols}
-            {"directions " if directions_has_bad_symbols}
-            """
-            raise Exception(error_message)
-    except Exception as error_message:
-        connection_to_db.close()
-        return jsonify({"error_message" : error_message}), 400
-    #--------------------------------------------------------
-    #---End of form validation----
-
-    #--Save given route by inserting it into DB--
-    db_output = connection_to_db.execute(text(
-        """
-        INSERT INTO TRAVEL_ROUTE (storedBy, modeOfTransportID, startCellCoord, endCellCoord, travelTime, totalDistance, totalCost, directions) 
-        VALUES (:storedBy, :modeOfTransportID, :startCellCoord, :endCellCoord, :travelTime, :totalDistance, :totalCost, :directions) 
-        RETURNING routeID
-        """
-    ), {
-        "storedBy" : user_id,
-        "modeOfTransportID" : modeOfTransportID,
-        "startCellCoord" : startCellCoord,
-        "endCellCoord" : endCellCoord,
-        "travelTime" : travelTime,
-        "totalDistance" : totalDistance,
-        "totalCost" : totalCost,
-        "directions" : directions 
-    })
-    table = db_output.fetchall() #Get the entire table
-    route_id = table[0][0] #table = [(routeID)]
-    #-------------Save route end-----------------
-
-    #--Close the DB connection--
-    connection_to_db.commit() #Commit the changes made to the DB
-    connection_to_db.close()
-    #---------------------------
-    
-    return jsonify("success" : True, "routeID" : route_id), 200
-
-"""
-Retreive all user data that is displayed on the profile page
-PARAMS:
-- user_id => ID of user
-"""
-@webApp.route("/<user_id>/", methods = ["GET"])
+@webApp.route("/<int:user_id>/", methods=["GET"])
+@require_auth(enforce_user_match=True)
 def getProfileData(user_id):
-    #Input check user id
-    ##Reject if needed
-    
-    #Make many DB calls to sort and grab only relevant user data from relevant tables
-    #Combine them into something parsable (JSON?)
-    #Return that
+    try:
+        with get_db_connection() as connection:
+            user_row = connection.execute(
+                text(
+                    """
+                    SELECT userID, email, registrationDate, username, userRole
+                    FROM USERS
+                    WHERE userID = :uid
+                    """
+                ),
+                {"uid": user_id},
+            ).fetchone()
+
+            if user_row is None:
+                return jsonify({"message": "User not found"}), 404
+
+            locations = fetch_locations(connection, user_id)
+            routes = fetch_saved_routes(connection, user_id)
+
+        user_payload = {
+            "userID": user_row.userID,
+            "email": user_row.email,
+            "registrationDate": user_row.registrationDate,
+            "username": user_row.username,
+            "role": user_row.userRole,
+        }
+
+        return jsonify({"user": user_payload, "locations": locations, "savedRoutes": routes}), 200
+    except SQLAlchemyError as exc:
+        print("Error loading profile", exc)
+        return jsonify({"message": "Unable to load profile"}), 500
+#----------------------------
+
+#--Admin analytics--
+@webApp.route("/admin/overview", methods=["GET"])
+@require_auth(required_role="admin")
+def get_admin_overview():
+    try:
+        with get_db_connection() as connection:
+            totals = connection.execute(
+                text(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM USERS) AS total_users,
+                        (SELECT COUNT(*) FROM CELL) AS total_locations,
+                        (SELECT COUNT(*) FROM TRAVEL_ROUTE) AS total_routes,
+                        (SELECT COUNT(*) FROM ROAD WHERE roadType = 'blocked') AS blocked_roads,
+                        (SELECT COUNT(*) FROM CELL WHERE NOT isPublic) AS pending_requests
+                    """
+                )
+            ).fetchone()
+
+        payload = {
+            "totalUsers": totals.total_users,
+            "totalLocations": totals.total_locations,
+            "totalRoutes": totals.total_routes,
+            "blockedRoads": totals.blocked_roads,
+            "pendingRequests": totals.pending_requests,
+            "lastSync": datetime.utcnow().isoformat() + "Z",
+        }
+        return jsonify(payload), 200
+    except SQLAlchemyError as exc:
+        print("Error loading admin overview", exc)
+        return jsonify({"message": "Unable to load overview"}), 500
+
+
+@webApp.route("/admin/users", methods=["GET"])
+@require_auth(required_role="admin")
+def get_admin_users():
+    limit = min(int(request.args.get("limit", 50)), 200)
+    offset = max(int(request.args.get("offset", 0)), 0)
+
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    WITH location_counts AS (
+                        SELECT createdBy AS user_id, COUNT(*) AS total
+                        FROM CELL
+                        GROUP BY createdBy
+                    ),
+                    route_counts AS (
+                        SELECT storedBy AS user_id, COUNT(*) AS total
+                        FROM TRAVEL_ROUTE
+                        GROUP BY storedBy
+                    )
+                    SELECT u.userID, u.username, u.email, u.userRole,
+                           COALESCE(loc.total, 0) AS locations,
+                           COALESCE(rt.total, 0) AS savedRoutes,
+                           u.registrationDate AS lastActive
+                    FROM USERS u
+                    LEFT JOIN location_counts loc ON loc.user_id = u.userID
+                    LEFT JOIN route_counts rt ON rt.user_id = u.userID
+                    ORDER BY u.userID
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                {"limit": limit, "offset": offset},
+            ).mappings().fetchall()
+
+        users = []
+        for row in rows:
+            users.append({
+                "userID": row["userID"],
+                "username": row["username"],
+                "email": row["email"],
+                "role": row["userRole"],
+                "locations": row["locations"],
+                "savedRoutes": row["savedRoutes"],
+                "lastActive": row["lastActive"],
+            })
+
+        return jsonify(users), 200
+    except SQLAlchemyError as exc:
+        print("Error loading admin users", exc)
+        return jsonify({"message": "Unable to load user roster"}), 500
+
+
+@webApp.route("/admin/activity", methods=["GET"])
+@require_auth(required_role="admin")
+def get_admin_activity():
+    now = datetime.utcnow()
+    events = [
+        {
+            "id": f"sync-{int(now.timestamp())}",
+            "timestamp": now.isoformat() + "Z",
+            "type": "sync",
+            "severity": "info",
+            "summary": "System sync completed successfully.",
+        },
+        {
+            "id": f"roads-{int(now.timestamp())}",
+            "timestamp": now.isoformat() + "Z",
+            "type": "mutation",
+            "severity": "warn",
+            "summary": "Monitoring blocked road segments for congestion.",
+        },
+    ]
+    return jsonify(events), 200
 #----------------------------
 
 #--Miscellaneous functions--
-"""
-Function that runs when the base webpage is accessed (the sign in page)
-"""
-@webApp.route("/", methods = ["GET"])
+@webApp.route("/", methods=["GET"])
 def getInitialPage():
-    return send_from_directory("INSERT_PATH_NAME_HERE", "index.html"), 200 # Grab the react file and serve it
+    return jsonify({"status": "ok"}), 200
 
-"""
-Given a path and the ID of the user who requested the route computation, determine additional facts about the route for the front end to display
-PARAMS:
-- user_id => ID of the user. Needed to grab their grid from the DB
-- shortest_route => The shortest route determined from a previously called A* search
-RETURN:
-- A list (dictionary?) of key information regarding the route (what areas are closed, total distance, total cost, directions in layman terms (no coordinates), etc)
-"""
 def getRouteInformation(user_id, shortest_route):
     #Find the user's graph from the DB using user_id, grab certain info from the DB about the grid (cost, distance, etc)
     #Take the shortest_route, iteratively check from node-to-node information from the user's graph, update resulting dictionary as you find new info (like updating total distance, or list of directions)
     #Return the resulting dictionary
+    pass
 
 # TODO: check over following code
-
-"""
-Normalize coordinate value from frontend or DB into hashable (x,y) tuple of floats
-"""
 
 def normalize_coord(coord):
     if coord is None or len(coord) != 2:
@@ -1037,10 +908,6 @@ def normalize_coord(coord):
 
     x, y = coord
     return (float(x), float(y))
-
-"""
-Build adjacency list and edge metadata from ROAD table
-"""
 
 def build_road_graph(connection_to_db):
     adjacency = defaultdict(list)
@@ -1073,18 +940,11 @@ def build_road_graph(connection_to_db):
 
     return adjacency, edge_info
 
-"""
-Heuristic for A*: Euclidean distance between two (x, y) points
-Calculzates the Chebsyshev distance between two points a and b 
-"""
 def heuristic(a, b):
     ax, ay = normalize_coord(a)
     bx, by = normalize_coord(b)
     return max(abs(ax - bx), abs(ay - by))
 
-"""
-Core A* implementation on a graph represented by adjacency list 
-"""
 def a_star(start, goal, adjacency):
     start = normalize_coord(start)
     goal = normalize_coord(goal)
@@ -1119,16 +979,6 @@ def a_star(start, goal, adjacency):
                 heapq.heappush(open_set, (f_score, neighbor))
 
     return None, None  # no valid path
-
- """
-A* search given:
-- user_id => The ID of the user (to grab their corresponding graph)
-- Starting location
-- Ending location
-- List of pitstops (empty list if none selected)
-- Mode of transport
-- etc (if something was missed)
-"""
 
 def aStarSearch(user_id, start, end, pitstops, adjacency):
     # Grab the necessary information given by the front end (see message above for all various information needed)
