@@ -2,7 +2,7 @@
 Back-end code to connect the front-end portion of the web application to the database.
 Written in Python using Flask.
 
-Author: Jason Duong, Yahya Asmara, Abdulrahman Negmeldin
+Authors: Jason Duong, Yahya Asmara, Abdulrahman Negmeldin
 """
 
 """
@@ -113,9 +113,7 @@ CORS(webApp, resources={r"/*": {"origins": "*"}})
 Creates a LoginManager instance and initializes it.
 TODO: Determine how login will work with react
 """
-#login_manager = LoginManager()
-#login_manager.init_app(webApp)
-#login_manager.login_view = "signup" # Tells flask login where to redirect the user if they're not logged in and they attempted to access a restricted webpage
+
 
 #--Authentication API--
 """
@@ -163,6 +161,225 @@ def decode_access_token(token: str) -> dict:
 
 def get_db_connection():
     return db_engine.connect()
+
+
+
+
+def require_auth(required_role: str | None = None, enforce_user_match: bool = False):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header.startswith('Bearer '):
+                return jsonify({"message": "Missing or invalid Authorization header"}), 401
+
+            token = auth_header.split(' ', 1)[1].strip()
+            try:
+                payload = decode_access_token(token)
+            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                return jsonify({"message": "Invalid or expired token"}), 401
+
+            user_id = int(payload.get('sub'))
+            with get_db_connection() as connection:
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT userID AS "userID", username, email, userRole AS "userRole"
+                        FROM USERS
+                        WHERE userID = :uid
+                        """
+                    ),
+                    {"uid": user_id},
+                ).mappings().fetchone()
+
+            if row is None:
+                return jsonify({"message": "User not found"}), 401
+
+            role = row["userRole"]
+            if required_role and role != required_role:
+                return jsonify({"message": "Forbidden"}), 403
+
+            if enforce_user_match:
+                path_user = kwargs.get('user_id') or request.view_args.get('user_id')
+                if path_user is not None and int(path_user) != user_id:
+                    return jsonify({"message": "Forbidden"}), 403
+
+            g.current_user = {
+                "user_id": user_id,
+                "username": row["username"],
+                "email": row["email"],
+                "role": role,
+            }
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+"""
+Function that runs when the user attempts to create an account
+"""
+@webApp.route("/create_account", methods = ["POST"])
+def createAccount():
+    #Check the front end input
+    email = request.form.get("email")
+    username = request.form.get("username")
+    password = request.form.get("password")
+    ##Reject and tell the front end if input is rejected
+    if not email or not username or not password:
+        return jsonify({
+            "success": False,
+            "message": "Missing email, username, or password"
+        }), 400
+
+    """
+    Add checks for email and username
+    """
+    if "@" not in email or "." not in email:
+        return jsonify({
+            "success": False,
+            "message": "Invalid email format."
+        }), 400
+
+    if len(username) < 3:
+        return jsonify({
+            "success": False,
+            "message": "Username must be at least 3 characters in length."
+        }), 400
+
+    pwd_hash = hash_password(password)
+    reg_date = datetime.utcnow().date().isoformat()
+    default_role = "mapper"
+
+    try:
+        with db_engine.begin() as connection:
+            existing = connection.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM USERS
+                    WHERE email = :email OR username = :username
+                    """
+                ),
+                {"email": email, "username": username},
+            ).fetchone()
+
+            if existing is not None:
+                return jsonify({
+                    "success": False,
+                    "message": "Email or username already in use"
+                }), 409
+
+            result = connection.execute(
+                text(
+                    """
+                    INSERT INTO USERS (email, username, userPassword, registrationDate, userRole)
+                    VALUES (:email, :username, :pwd_hash, :reg_date, :role)
+                    RETURNING userID AS "userID", userRole AS "userRole"
+                    """
+                ),
+                {
+                    "email": email,
+                    "username": username,
+                    "pwd_hash": pwd_hash,
+                    "reg_date": reg_date,
+                    "role": default_role,
+                },
+            ).mappings().fetchone()
+
+        user_id = result["userID"]
+        role = result["userRole"]
+        access_token = create_access_token(user_id, role)
+
+        return jsonify({
+            "success": True,
+            "message": "Account created successfully.",
+            "data": {
+                "user_id": user_id,
+                "username": username,
+                "email": email,
+                "role": role,
+                "token": access_token
+            }
+
+        }), 201
+    except SQLAlchemyError as e:
+        print("Error: ", e)
+        return jsonify({
+            "success": False,
+            "message": "Internal server error"
+        }), 500
+
+"""
+Function that runs when the user attempts to sign in
+"""
+@webApp.route("/sign_in", methods = ["POST"])
+def signIn():
+    #Check the front end input
+    username = request.form.get("username")
+    password = request.form.get("password")
+
+    #Reject and tell the front end if input is rejected
+    if not password or not username:
+        return jsonify({
+            "success": False,
+            "message": "Missing username or password"
+        }), 400
+
+    try:
+        with get_db_connection() as connection:
+            user_row = connection.execute(
+                text(
+                    """
+                    SELECT userID AS "userID", username, email, userPassword AS "userPassword", userRole AS "userRole"
+                    FROM USERS
+                    WHERE username = :username
+                    """
+                ),
+                {"username": username},
+            ).mappings().fetchone()
+
+        if user_row is None:
+            return jsonify({
+                "success": False,
+                "message": "Username or password is incorrect."
+            }), 401
+
+        user_id = user_row["userID"]
+        email = user_row["email"]
+        pwd_hash = user_row["userPassword"]
+        role = user_row["userRole"]
+
+        if not verify_password(pwd_hash, password):
+            return jsonify({
+                "success": False,
+                "message": "Invalid password."
+            }), 401
+
+        access_token = create_access_token(user_id, role)
+
+        return jsonify({
+            "success": True,
+            "message": "User logged in successfully.",
+            "data": {
+                "user_id": user_id,
+                "username": username,
+                "email": email,
+                "role": role,
+                "token": access_token
+            }
+        }), 200
+
+    except SQLAlchemyError as e:
+        print("Error: ", e)
+        return jsonify({
+            "success": False,
+            "message": "Internal server error"
+        }), 500
+#----------------------
+
+#--API Methods for Frontend--
 
 
 def point_to_pair(value):
@@ -573,222 +790,6 @@ def delete_user_records(connection, user_id: int) -> bool:
     )
     return result.rowcount > 0
 
-
-def require_auth(required_role: str | None = None, enforce_user_match: bool = False):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            auth_header = request.headers.get('Authorization', '')
-            if not auth_header.startswith('Bearer '):
-                return jsonify({"message": "Missing or invalid Authorization header"}), 401
-
-            token = auth_header.split(' ', 1)[1].strip()
-            try:
-                payload = decode_access_token(token)
-            except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-                return jsonify({"message": "Invalid or expired token"}), 401
-
-            user_id = int(payload.get('sub'))
-            with get_db_connection() as connection:
-                row = connection.execute(
-                    text(
-                        """
-                        SELECT userID AS "userID", username, email, userRole AS "userRole"
-                        FROM USERS
-                        WHERE userID = :uid
-                        """
-                    ),
-                    {"uid": user_id},
-                ).mappings().fetchone()
-
-            if row is None:
-                return jsonify({"message": "User not found"}), 401
-
-            role = row["userRole"]
-            if required_role and role != required_role:
-                return jsonify({"message": "Forbidden"}), 403
-
-            if enforce_user_match:
-                path_user = kwargs.get('user_id') or request.view_args.get('user_id')
-                if path_user is not None and int(path_user) != user_id:
-                    return jsonify({"message": "Forbidden"}), 403
-
-            g.current_user = {
-                "user_id": user_id,
-                "username": row["username"],
-                "email": row["email"],
-                "role": role,
-            }
-
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-"""
-Function that runs when the user attempts to create an account
-"""
-@webApp.route("/create_account", methods = ["POST"])
-def createAccount():
-    #Check the front end input
-    email = request.form.get("email")
-    username = request.form.get("username")
-    password = request.form.get("password")
-    ##Reject and tell the front end if input is rejected
-    if not email or not username or not password:
-        return jsonify({
-            "success": False,
-            "message": "Missing email, username, or password"
-        }), 400
-
-    """
-    Add checks for email and username
-    """
-    if "@" not in email or "." not in email:
-        return jsonify({
-            "success": False,
-            "message": "Invalid email format."
-        }), 400
-
-    if len(username) < 3:
-        return jsonify({
-            "success": False,
-            "message": "Username must be at least 3 characters in length."
-        }), 400
-
-    pwd_hash = hash_password(password)
-    reg_date = datetime.utcnow().date().isoformat()
-    default_role = "mapper"
-
-    try:
-        with db_engine.begin() as connection:
-            existing = connection.execute(
-                text(
-                    """
-                    SELECT 1
-                    FROM USERS
-                    WHERE email = :email OR username = :username
-                    """
-                ),
-                {"email": email, "username": username},
-            ).fetchone()
-
-            if existing is not None:
-                return jsonify({
-                    "success": False,
-                    "message": "Email or username already in use"
-                }), 409
-
-            result = connection.execute(
-                text(
-                    """
-                    INSERT INTO USERS (email, username, userPassword, registrationDate, userRole)
-                    VALUES (:email, :username, :pwd_hash, :reg_date, :role)
-                    RETURNING userID AS "userID", userRole AS "userRole"
-                    """
-                ),
-                {
-                    "email": email,
-                    "username": username,
-                    "pwd_hash": pwd_hash,
-                    "reg_date": reg_date,
-                    "role": default_role,
-                },
-            ).mappings().fetchone()
-
-        user_id = result["userID"]
-        role = result["userRole"]
-        access_token = create_access_token(user_id, role)
-
-        return jsonify({
-            "success": True,
-            "message": "Account created successfully.",
-            "data": {
-                "user_id": user_id,
-                "username": username,
-                "email": email,
-                "role": role,
-                "token": access_token
-            }
-
-        }), 201
-    except SQLAlchemyError as e:
-        print("Error: ", e)
-        return jsonify({
-            "success": False,
-            "message": "Internal server error"
-        }), 500
-
-"""
-Function that runs when the user attempts to sign in
-"""
-@webApp.route("/sign_in", methods = ["POST"])
-def signIn():
-    #Check the front end input
-    username = request.form.get("username")
-    password = request.form.get("password")
-
-    #Reject and tell the front end if input is rejected
-    if not password or not username:
-        return jsonify({
-            "success": False,
-            "message": "Missing username or password"
-        }), 400
-
-    try:
-        with get_db_connection() as connection:
-            user_row = connection.execute(
-                text(
-                    """
-                    SELECT userID AS "userID", username, email, userPassword AS "userPassword", userRole AS "userRole"
-                    FROM USERS
-                    WHERE username = :username
-                    """
-                ),
-                {"username": username},
-            ).mappings().fetchone()
-
-        if user_row is None:
-            return jsonify({
-                "success": False,
-                "message": "Username or password is incorrect."
-            }), 401
-
-        user_id = user_row["userID"]
-        email = user_row["email"]
-        pwd_hash = user_row["userPassword"]
-        role = user_row["userRole"]
-
-        if not verify_password(pwd_hash, password):
-            return jsonify({
-                "success": False,
-                "message": "Invalid password."
-            }), 401
-
-        access_token = create_access_token(user_id, role)
-
-        return jsonify({
-            "success": True,
-            "message": "User logged in successfully.",
-            "data": {
-                "user_id": user_id,
-                "username": username,
-                "email": email,
-                "role": role,
-                "token": access_token
-            }
-        }), 200
-
-    except SQLAlchemyError as e:
-        print("Error: ", e)
-        return jsonify({
-            "success": False,
-            "message": "Internal server error"
-        }), 500
-#----------------------
-
-#--API Methods for Frontend--
 @webApp.route("/<int:user_id>/getGraph", methods=["GET"])
 @require_auth(enforce_user_match=True)
 def getGraph(user_id):
@@ -1533,21 +1534,26 @@ def get_admin_activity():
 def getInitialPage():
     return jsonify({"status": "ok"}), 200
 
-def getRouteInformation(user_id, shortest_route):
-    #Find the user's graph from the DB using user_id, grab certain info from the DB about the grid (cost, distance, etc)
-    #Take the shortest_route, iteratively check from node-to-node information from the user's graph, update resulting dictionary as you find new info (like updating total distance, or list of directions)
-    #Return the resulting dictionary
-    pass
 
-# TODO: check over following code
 
+"""
+Functions used for pathfinding
+"""
+
+"""
+Function to ensure coordinates are consistent for all pathfinding functions
+"""
 def normalize_coord(coord):
     if coord is None or len(coord) != 2:
         raise ValueError("Coordinates must be a 2-element sequence")
 
     x, y = coord
-    return (float(x), float(y))
+    return (float(x), float(y)) #return x,y coordinates
 
+
+"""
+Function to build the road 
+"""
 def build_road_graph(connection_to_db):
     adjacency = defaultdict(list)
     edge_info = {}
@@ -1579,11 +1585,18 @@ def build_road_graph(connection_to_db):
 
     return adjacency, edge_info
 
+"""
+The heuristic used in A* pathfinding is Chebyshev 
+This function servers to calculate the distance 
+"""
 def heuristic(a, b):
     ax, ay = normalize_coord(a)
     bx, by = normalize_coord(b)
     return max(abs(ax - bx), abs(ay - by))
 
+"""
+Actual A* pathfinding code using the start and end goal 
+"""
 def a_star(start, goal, adjacency):
     start = normalize_coord(start)
     goal = normalize_coord(goal)
@@ -1619,12 +1632,14 @@ def a_star(start, goal, adjacency):
 
     return None, None  # no valid path
 
+"""
+Helper function as part of A* pathfinding
+Grab the necessary information given by the front end (see message above for all various information needed)
+Do an A* search using the information given
+Format resulting path in a nice and easy to utilize way 
+Return full path and cost 
+"""
 def aStarSearch(user_id, start, end, pitstops, adjacency):
-    # Grab the necessary information given by the front end (see message above for all various information needed)
-    # Do an A* search using the information given
-    # Format resulting path in a nice and easy to utilize way (JSON?)
-    # Send to front end to parse and load
-
     current = normalize_coord(start)
     final_goal = normalize_coord(end)
     pitstops = [normalize_coord(p) for p in (pitstops or [])]
