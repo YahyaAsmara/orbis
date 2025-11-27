@@ -10,11 +10,22 @@ export interface User {
   role: UserRole
 }
 
+export type LocationType =
+  | 'Hotel'
+  | 'Park'
+  | 'Cafe'
+  | 'Restaurant'
+  | 'Landmark'
+  | 'Gas_Station'
+  | 'Electric_Charging_Station'
+
+export type TransportType = 'Car' | 'Bicycle' | 'Bus' | 'Walking'
+
 export interface Location {
   locationID: number
   coordinate: [number, number] // [x, y] point
   locationName: string
-  locationType: 'Hotel' | 'Park' | 'Cafe' | 'Restaurant' | 'Landmark' | 'Gas_Station' | 'Electric_Charging_Station'
+  locationType: LocationType
   isPublic: boolean
   maxCapacity: number
   parkingSpaces: number
@@ -54,7 +65,7 @@ export interface ModeOfTransport {
   transportID: number
   speedMultiplier: number
   isEcoFriendly: boolean
-  transportType: 'Car' | 'Bicycle' | 'Bus' | 'Walking'
+  transportType: TransportType
   energyEfficiency?: number
 }
 
@@ -80,7 +91,7 @@ export interface TravelRoute {
 
 export interface SaveRouteRequest {
   modeOfTransportID?: number
-  transportType?: ModeOfTransport['transportType']
+  transportType?: TransportType
   startCellCoord: [number, number]
   endCellCoord: [number, number]
   travelTime: string
@@ -111,6 +122,7 @@ export interface AuthResponse {
   role?: UserRole
 }
 
+export interface GraphResponse {
   locations: Location[]
   roads: Road[]
 }
@@ -118,7 +130,7 @@ export interface AuthResponse {
 export interface AddLocationRequest {
   coordinate: [number, number]
   locationName: string
-  locationType: Location['locationType']
+  locationType: LocationType
   isPublic: boolean
   maxCapacity: number
   parkingSpaces: number
@@ -128,7 +140,7 @@ export interface ComputePathRequest {
   startCoord: [number, number]
   endCoord: [number, number]
   pitStops?: [number, number][]
-  transportType: ModeOfTransport['transportType']
+  transportType: TransportType
   timeOfDay: string
 }
 
@@ -142,7 +154,7 @@ export interface ComputePathResponse {
 }
 
 export interface RouteSummary extends ComputePathResponse {
-  mode: ModeOfTransport['transportType']
+  mode: TransportType
   speed: number
   costPerLeague: number
   description: string
@@ -179,7 +191,7 @@ export interface AdminActivity {
 export interface AdminLocationRecord {
   locationID: number
   locationName: string
-  locationType: Location['locationType']
+  locationType: LocationType
   coordinate: [number, number]
   owner: string
   isPublic: boolean
@@ -190,7 +202,7 @@ export interface AdminLocationRecord {
 export interface AdminRouteRecord {
   routeID: number
   owner: string
-  transportType: ModeOfTransport['transportType'] | null
+  transportType: TransportType | null
   startCellCoord: [number, number]
   endCellCoord: [number, number]
   totalDistance: string
