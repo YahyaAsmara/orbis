@@ -91,6 +91,14 @@ if not SECRET_KEY:
 
 db_engine = create_engine(DATABASE_URL)
 
+DEFAULT_TRANSPORT_TYPE = "Car"
+TRANSPORT_MODE_DEFAULTS = {
+    "Car": {"speedMultiplier": 60, "isEcoFriendly": False, "energyEfficiency": 25},
+    "Bicycle": {"speedMultiplier": 18, "isEcoFriendly": True, "energyEfficiency": 90},
+    "Bus": {"speedMultiplier": 40, "isEcoFriendly": False, "energyEfficiency": 45},
+    "Walking": {"speedMultiplier": 5, "isEcoFriendly": True, "energyEfficiency": 100},
+}
+
 """
 Create a Flask instance of the current file.
 __name__ denotes the current file, value varies by whether this file is imported or ran directly.
@@ -199,6 +207,67 @@ def lseg_to_pair(value):
                 return coords
 
     raise ValueError(f"Unable to parse line segment value: {value}")
+
+
+def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
+    normalized = transport_type if transport_type in TRANSPORT_MODE_DEFAULTS else DEFAULT_TRANSPORT_TYPE
+    existing = connection.execute(
+        text(
+            """
+            SELECT transportID AS "transportID"
+            FROM MODE_OF_TRANSPORT
+            WHERE transportType = :tt
+            ORDER BY transportID
+            LIMIT 1
+            """
+        ),
+        {"tt": normalized},
+    ).fetchone()
+
+    if existing:
+        return existing.transportID
+
+    defaults = TRANSPORT_MODE_DEFAULTS.get(normalized, TRANSPORT_MODE_DEFAULTS[DEFAULT_TRANSPORT_TYPE])
+    created = connection.execute(
+        text(
+            """
+            INSERT INTO MODE_OF_TRANSPORT (speedMultiplier, isEcoFriendly, transportType, energyEfficiency)
+            VALUES (:speedMultiplier, :isEcoFriendly, :transportType, :energyEfficiency)
+            RETURNING transportID
+            """
+        ),
+        {
+            "speedMultiplier": defaults["speedMultiplier"],
+            "isEcoFriendly": defaults["isEcoFriendly"],
+            "transportType": normalized,
+            "energyEfficiency": defaults["energyEfficiency"],
+        },
+    ).fetchone()
+
+    return created.transportID
+
+
+def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
+    if transport_id is None:
+        return False
+
+    row = connection.execute(
+        text("SELECT 1 FROM MODE_OF_TRANSPORT WHERE transportID = :tid"),
+        {"tid": transport_id},
+    ).fetchone()
+    return row is not None
+
+
+def bootstrap_transport_modes():
+    with db_engine.begin() as connection:
+        for transport_type in TRANSPORT_MODE_DEFAULTS:
+            ensure_transport_mode_id(connection, transport_type)
+
+
+try:
+    bootstrap_transport_modes()
+except SQLAlchemyError as exc:
+    print("Warning: unable to bootstrap transport modes", exc)
 
 
 def fetch_locations(connection, user_id: int):
@@ -731,6 +800,14 @@ def saveRoute(user_id):
 
     try:
         with db_engine.begin() as connection:
+            transport_type = payload.get("transportType")
+            transport_id = payload.get("modeOfTransportID")
+
+            if transport_type:
+                transport_id = ensure_transport_mode_id(connection, transport_type)
+            elif not transport_id_exists(connection, transport_id):
+                transport_id = ensure_transport_mode_id(connection, DEFAULT_TRANSPORT_TYPE)
+
             result = connection.execute(
                 text(
                     """
@@ -746,7 +823,7 @@ def saveRoute(user_id):
                 ),
                 {
                     "storedBy": user_id,
-                    "mode": payload.get("modeOfTransportID", 1),
+                    "mode": transport_id,
                     "sx": start[0],
                     "sy": start[1],
                     "ex": end[0],

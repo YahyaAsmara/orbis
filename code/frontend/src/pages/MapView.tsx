@@ -23,13 +23,6 @@ const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
   Walking: { speed: 5, costPerLeague: 0.0, description: 'Slowest option yet no cost and full flexibility' },
 }
 
-const TRANSPORT_MODE_IDS: Record<ModeOfTransport['transportType'], number> = {
-  Car: 1,
-  Bicycle: 2,
-  Bus: 3,
-  Walking: 4,
-}
-
 type RouteSummary = ComputePathResponse & {
   mode: ModeOfTransport['transportType']
   speed: number
@@ -256,7 +249,7 @@ export default function MapView() {
     setRouteSaveFeedback(null)
     try {
       await routeAPI.saveRoute(userId, {
-        modeOfTransportID: TRANSPORT_MODE_IDS[routeSummary.mode],
+        transportType: routeSummary.mode,
         startCellCoord: start,
         endCellCoord: end,
         travelTime: routeSummary.totalTime.toFixed(2),

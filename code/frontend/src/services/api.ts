@@ -2,6 +2,7 @@ import type {
   User,
   Location,
   TravelRoute,
+  SaveRouteRequest,
   CreateAccountRequest,
   SignInRequest,
   AuthResponse,
@@ -185,7 +186,7 @@ export const routeAPI = {
     })
   },
 
-  async saveRoute(userId: number, route: Omit<TravelRoute, 'routeID' | 'storedBy'>): Promise<{ success: boolean; routeID?: number }> {
+  async saveRoute(userId: number, route: SaveRouteRequest): Promise<{ success: boolean; routeID?: number }> {
     return apiRequest(`/${userId}/saveRoute`, {
       method: 'POST',
       body: JSON.stringify(route),

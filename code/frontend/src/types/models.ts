@@ -78,6 +78,17 @@ export interface TravelRoute {
   directions: string[]
 }
 
+export interface SaveRouteRequest {
+  modeOfTransportID?: number
+  transportType?: ModeOfTransport['transportType']
+  startCellCoord: [number, number]
+  endCellCoord: [number, number]
+  travelTime: string
+  totalDistance: string
+  totalCost: string
+  directions: string[]
+}
+
 // API request/response types
 export interface CreateAccountRequest {
   email: string
