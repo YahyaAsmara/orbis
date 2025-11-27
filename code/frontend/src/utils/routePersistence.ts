@@ -81,4 +81,3 @@ export function clearPendingRouteSelection() {
   if (!storage) return
   storage.removeItem(SELECTED_ROUTE_KEY)
 }
-*** End Patch
