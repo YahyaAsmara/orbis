@@ -4,6 +4,7 @@ import * as L from 'leaflet'
 import { locationAPI, routeAPI, authAPI } from '../services/api'
 import type {
   Location,
+  LocationType,
   Road,
   GraphResponse,
   AddLocationRequest,
@@ -30,6 +31,32 @@ const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
   Bicycle: { speed: 18, costPerLeague: 0.2, description: 'Muscle-powered, zero emissions but slower pace' },
   Bus: { speed: 40, costPerLeague: 1.6, description: 'Shared transit, steady pace with low personal cost' },
   Walking: { speed: 5, costPerLeague: 0.0, description: 'Slowest option yet no cost and full flexibility' },
+}
+
+const LOCATION_ICON_META: Record<LocationType, { emoji: string; color: string }> = {
+  Hotel: { emoji: '🏨', color: '#b67945' },
+  Park: { emoji: '🌳', color: '#2f8f5b' },
+  Cafe: { emoji: '☕', color: '#6b4c3b' },
+  Restaurant: { emoji: '🍽️', color: '#b9413a' },
+  Landmark: { emoji: '🗿', color: '#555c73' },
+  Gas_Station: { emoji: '⛽', color: '#a0522d' },
+  Electric_Charging_Station: { emoji: '⚡', color: '#e1ba25' },
+}
+
+const LOCATION_ICON_CACHE: Partial<Record<LocationType, L.DivIcon>> = {}
+
+const getLocationIcon = (type: LocationType) => {
+  if (!LOCATION_ICON_CACHE[type]) {
+    const meta = LOCATION_ICON_META[type] ?? { emoji: '📍', color: '#d35400' }
+    LOCATION_ICON_CACHE[type] = L.divIcon({
+      className: '',
+      html: `<div class="orbis-marker" style="--pin-color:${meta.color}"><span class="orbis-marker__emoji">${meta.emoji}</span></div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 34],
+      popupAnchor: [0, -28],
+    })
+  }
+  return LOCATION_ICON_CACHE[type]!
 }
 
 const generateRouteId = () => {
@@ -393,6 +420,7 @@ export default function MapView() {
                 <Marker
                   key={loc.locationID}
                   position={[loc.coordinate[0], loc.coordinate[1]]}
+                  icon={getLocationIcon(loc.locationType)}
                   eventHandlers={{
                     click: () => setSelectedLocation(loc),
                   }}
@@ -771,7 +799,7 @@ function GridOverlay({ spacing = 1, extent = 64 }: { spacing?: number; extent?: 
         <Polyline
           key={line.key}
           positions={line.positions}
-          pathOptions={{ color: '#e0d7c5', weight: 1, opacity: 0.6 }}
+          pathOptions={{ color: '#c7b79c', weight: 1, opacity: 0.65 }}
         />
       ))}
     </>

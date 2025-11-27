@@ -29,6 +29,8 @@ Used in the context of Render. Allows this file to connect to the database via a
 """
 import os
 import re
+import math
+from itertools import combinations
 from functools import wraps
 from typing import Optional
 
@@ -378,6 +380,84 @@ def fetch_saved_routes(connection, user_id: int):
     return routes
 
 
+def ensure_connects_to(connection, road_id: int, location_id: int):
+    connection.execute(
+        text(
+            """
+            INSERT INTO CONNECTS_TO (roadID, locationID)
+            VALUES (:road_id, :location_id)
+            ON CONFLICT DO NOTHING
+            """
+        ),
+        {"road_id": road_id, "location_id": location_id},
+    )
+
+
+def road_segment_exists(connection, coord_a, coord_b):
+    return connection.execute(
+        text(
+            """
+            SELECT roadID AS "roadID"
+            FROM ROAD
+            WHERE roadSegment = lseg(point(:ax, :ay), point(:bx, :by))
+               OR roadSegment = lseg(point(:bx, :by), point(:ax, :ay))
+            LIMIT 1
+            """
+        ),
+        {
+            "ax": coord_a[0],
+            "ay": coord_a[1],
+            "bx": coord_b[0],
+            "by": coord_b[1],
+        },
+    ).scalar_one_or_none()
+
+
+def ensure_road_between_locations(connection, loc_a, loc_b):
+    coord_a = tuple(loc_a["coordinate"])
+    coord_b = tuple(loc_b["coordinate"])
+    if coord_a == coord_b:
+        return
+
+    existing = road_segment_exists(connection, coord_a, coord_b)
+    if existing is not None:
+        ensure_connects_to(connection, existing, loc_a["locationID"])
+        ensure_connects_to(connection, existing, loc_b["locationID"])
+        return
+
+    distance = math.dist(coord_a, coord_b)
+    road_name = f"AutoRoute {loc_a['locationID']}↔{loc_b['locationID']}"
+    road_id = connection.execute(
+        text(
+            """
+            INSERT INTO ROAD (roadSegment, roadName, distance, roadType)
+            VALUES (lseg(point(:ax, :ay), point(:bx, :by)), :roadName, :distance, 'unblocked')
+            RETURNING roadID AS "roadID"
+            """
+        ),
+        {
+            "ax": coord_a[0],
+            "ay": coord_a[1],
+            "bx": coord_b[0],
+            "by": coord_b[1],
+            "roadName": road_name,
+            "distance": round(distance, 3),
+        },
+    ).scalar_one()
+
+    ensure_connects_to(connection, road_id, loc_a["locationID"])
+    ensure_connects_to(connection, road_id, loc_b["locationID"])
+
+
+def ensure_triangular_roads_for_user(connection, user_id: int):
+    locations = fetch_locations(connection, user_id)
+    if len(locations) < 3:
+        return
+
+    for loc_a, loc_b in combinations(locations, 2):
+        ensure_road_between_locations(connection, loc_a, loc_b)
+
+
 def delete_user_records(connection, user_id: int) -> bool:
     connection.execute(
         text("DELETE FROM TRAVEL_ROUTE WHERE storedBy = :uid"),
@@ -659,6 +739,8 @@ def addLocation(user_id):
                 },
             ).mappings().fetchone()
 
+            ensure_triangular_roads_for_user(connection, user_id)
+
         return jsonify({"success": True, "locationID": result["locationID"]}), 201
     except SQLAlchemyError as exc:
         print("Error adding location", exc)
@@ -680,12 +762,47 @@ def removeLocation(user_id):
 
     try:
         with db_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT coordinate AS "coordinate"
+                    FROM CELL
+                    WHERE locationID = :lid AND createdBy = :uid
+                    FOR UPDATE
+                    """
+                ),
+                {"lid": location_id, "uid": user_id},
+            ).mappings().fetchone()
+
+            if row is None:
+                return jsonify({"message": "Location not found"}), 404
+
+            coord_pair = point_to_pair(row["coordinate"]) if row.get("coordinate") is not None else None
+            if coord_pair is None:
+                return jsonify({"message": "Location coordinate missing"}), 400
+
+            x_coord, y_coord = coord_pair
+
+            deleted_routes = connection.execute(
+                text(
+                    """
+                    DELETE FROM TRAVEL_ROUTE
+                    WHERE storedBy = :uid
+                      AND (
+                        startCellCoord = point(:x, :y)
+                        OR endCellCoord = point(:x, :y)
+                      )
+                    """
+                ),
+                {"uid": user_id, "x": x_coord, "y": y_coord},
+            )
+
             connection.execute(
                 text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
                 {"lid": location_id, "uid": user_id},
             )
 
-        return jsonify({"success": True}), 200
+        return jsonify({"success": True, "removedRoutes": deleted_routes.rowcount}), 200
     except SQLAlchemyError as exc:
         print("Error removing location", exc)
         return jsonify({"message": "Unable to remove location"}), 500
