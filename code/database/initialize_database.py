@@ -16,6 +16,7 @@ Imports create_engine as the main entry point into the DB
 Imports text to safely inject SQL code into the database
 """
 import os
+from pathlib import Path
 from sqlalchemy import create_engine, text
 
 
@@ -30,14 +31,25 @@ def _build_engine():
     return create_engine(database_url)
 
 
-#--Set up and connect to DB--
 db_engine = _build_engine()
-connection_to_db = db_engine.connect()
-#----------------------------
 
-connection_to_db.execute(text(open("database_configurations.sql", "r").read())) # Read the configurations file and send it as a command to the DB to execute
+
+def _run_schema():
+    schema_path = Path(__file__).with_name("database_configurations.sql")
+    with schema_path.open("r", encoding="utf-8") as schema_file:
+        schema_sql = schema_file.read()
+
+    # use a transaction so the schema is committed automatically
+    with db_engine.begin() as connection:
+        connection.execute(text(schema_sql))
+
+
+_run_schema()
 
 print("Initialization Successful")
+
+# open a fresh connection for the interactive CLI
+connection_to_db = db_engine.connect()
 
 while True: #While loop. Interact with the DB after initialization
     userInput = input() #Get user input 

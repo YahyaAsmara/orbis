@@ -413,10 +413,10 @@ def createAccount():
                     "reg_date": reg_date,
                     "role": default_role,
                 },
-            ).fetchone()
+            ).mappings().fetchone()
 
-        user_id = result.userID
-        role = result.userRole
+        user_id = result["userID"]
+        role = result["userRole"]
         access_token = create_access_token(user_id, role)
 
         return jsonify({
@@ -457,7 +457,7 @@ def signIn():
 
     try:
         with get_db_connection() as connection:
-            result = connection.execute(
+            user_row = connection.execute(
                 text(
                     """
                     SELECT userID, username, email, userPassword, userRole
@@ -466,9 +466,7 @@ def signIn():
                     """
                 ),
                 {"username": username},
-            )
-
-            user_row = result.fetchone()
+            ).mappings().fetchone()
 
         if user_row is None:
             return jsonify({
@@ -476,10 +474,10 @@ def signIn():
                 "message": "Username or password is incorrect."
             }), 401
 
-        user_id = user_row.userID
-        email = user_row.email
-        pwd_hash = user_row.userPassword
-        role = user_row.userRole
+        user_id = user_row["userID"]
+        email = user_row["email"]
+        pwd_hash = user_row["userPassword"]
+        role = user_row["userRole"]
 
         if not verify_password(pwd_hash, password):
             return jsonify({
