@@ -274,7 +274,6 @@ function LocationCard({ location, onEdit }: { location: Location, onEdit: () => 
           </div>
         </div>
       </div>
-    </div>
   )
 }
 
