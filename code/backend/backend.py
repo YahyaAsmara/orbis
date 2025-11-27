@@ -222,7 +222,7 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
             """
         ),
         {"tt": normalized},
-    ).fetchone()
+    ).mappings().fetchone()
 
     if existing:
         return existing.transportID
@@ -242,7 +242,7 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
             "transportType": normalized,
             "energyEfficiency": defaults["energyEfficiency"],
         },
-    ).fetchone()
+    ).mappings().fetchone()
 
     return created.transportID
 
