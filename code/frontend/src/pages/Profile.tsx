@@ -141,6 +141,44 @@ export default function Profile() {
     )
   }, [data])
 
+  const locationNameByCoord = useMemo(() => {
+    const map = new Map<string, string>()
+    data?.locations.forEach((loc) => {
+      map.set(`${loc.coordinate[0]}:${loc.coordinate[1]}`, loc.locationName)
+    })
+    return map
+  }, [data?.locations])
+
+  const describeRoadEndpoint = (coord: [number, number], road: Road) => {
+    const match = road.connectedLocations?.find((conn) =>
+      Array.isArray(conn.coordinate) && conn.coordinate[0] === coord[0] && conn.coordinate[1] === coord[1]
+    )
+    if (match?.locationName) {
+      return match.locationName
+    }
+    const fallback = locationNameByCoord.get(`${coord[0]}:${coord[1]}`)
+    if (fallback) {
+      return fallback
+    }
+    return `[${coord[0]}, ${coord[1]}]`
+  }
+
+  const describeConnectedList = (road: Road) => {
+    if (road.connectedLocations && road.connectedLocations.length > 0) {
+      return road.connectedLocations
+        .map((conn) => {
+          if (conn.locationName) return conn.locationName
+          if (conn.coordinate) {
+            return `[${conn.coordinate[0]}, ${conn.coordinate[1]}]`
+          }
+          return conn.locationID ? `Location #${conn.locationID}` : 'Unknown'
+        })
+        .join(' ↔ ')
+    }
+    const [start, end] = road.roadSegment
+    return `${describeRoadEndpoint(start, road)} ↔ ${describeRoadEndpoint(end, road)}`
+  }
+
   if (!userId) {
     return null
   }
@@ -302,6 +340,9 @@ export default function Profile() {
                 <p className="text-mono text-sm font-bold">{road.roadName ?? `Road #${road.roadID}`}</p>
                 <p className="text-mono text-xs text-contour">
                   Segment [{road.roadSegment[0][0]}, {road.roadSegment[0][1]}] → [{road.roadSegment[1][0]}, {road.roadSegment[1][1]}]
+                </p>
+                <p className="text-mono text-xs text-contour">
+                  Links {describeConnectedList(road)}
                 </p>
                 <p className="text-mono text-xs">Distance {road.distance} · Status {road.roadType === 'blocked' ? 'Blocked' : 'Unblocked'}</p>
                 <button

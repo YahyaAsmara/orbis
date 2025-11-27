@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { adminAPI, authAPI } from '../services/api'
-import type { AdminOverview, AdminUserRecord, AdminLocationRecord, AdminRouteRecord } from '../types/models'
+import type { AdminOverview, AdminUserRecord, AdminLocationRecord, AdminRouteRecord, AdminRoadRecord } from '../types/models'
 
 export default function AdminDashboard() {
   const navigate = useNavigate()
@@ -9,12 +9,16 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<AdminUserRecord[]>([])
   const [locations, setLocations] = useState<AdminLocationRecord[]>([])
   const [routes, setRoutes] = useState<AdminRouteRecord[]>([])
+  const [roads, setRoads] = useState<AdminRoadRecord[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'mapper' | 'viewer'>('all')
   const [roleBusy, setRoleBusy] = useState<Record<number, boolean>>({})
   const [deleteBusy, setDeleteBusy] = useState<Record<number, boolean>>({})
+  const [locationBusy, setLocationBusy] = useState<Record<number, boolean>>({})
+  const [routeBusy, setRouteBusy] = useState<Record<number, boolean>>({})
+  const [roadBusy, setRoadBusy] = useState<Record<number, boolean>>({})
   const currentUserId = authAPI.getCurrentUserId()
 
   useEffect(() => {
@@ -29,16 +33,18 @@ export default function AdminDashboard() {
     setIsRefreshing(true)
     setError(null)
     try {
-      const [overviewData, usersData, locationsData, routesData] = await Promise.all([
+      const [overviewData, usersData, locationsData, routesData, roadsData] = await Promise.all([
         adminAPI.getOverview(),
         adminAPI.getUsers(),
         adminAPI.getLocations(),
         adminAPI.getRoutes(),
+        adminAPI.getRoads(),
       ])
       setOverview(overviewData)
       setUsers(usersData)
       setLocations(locationsData)
       setRoutes(routesData)
+      setRoads(roadsData)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load admin data'
       setError(message)
@@ -115,6 +121,54 @@ export default function AdminDashboard() {
     }
   }
 
+  const handleDeleteLocationRecord = async (locationId: number) => {
+    const confirmed = window.confirm('Remove this location from the Atlas?')
+    if (!confirmed) return
+
+    toggleBusy(setLocationBusy, locationId, true)
+    try {
+      await adminAPI.deleteLocation(locationId)
+      await refreshAll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete location'
+      setError(message)
+    } finally {
+      toggleBusy(setLocationBusy, locationId, false)
+    }
+  }
+
+  const handleDeleteRouteRecord = async (routeId: number) => {
+    const confirmed = window.confirm('Delete this saved route?')
+    if (!confirmed) return
+
+    toggleBusy(setRouteBusy, routeId, true)
+    try {
+      await adminAPI.deleteRoute(routeId)
+      await refreshAll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete route'
+      setError(message)
+    } finally {
+      toggleBusy(setRouteBusy, routeId, false)
+    }
+  }
+
+  const handleDeleteRoadRecord = async (roadId: number) => {
+    const confirmed = window.confirm('Remove this road segment? Connected locations will lose this edge.')
+    if (!confirmed) return
+
+    toggleBusy(setRoadBusy, roadId, true)
+    try {
+      await adminAPI.deleteRoad(roadId)
+      await refreshAll()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete road'
+      setError(message)
+    } finally {
+      toggleBusy(setRoadBusy, roadId, false)
+    }
+  }
+
   return (
     <div className="animate-fade-in space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -177,12 +231,23 @@ export default function AdminDashboard() {
         <LocationsPanel
           loading={isRefreshing && locations.length === 0}
           locations={locations}
+          onDelete={handleDeleteLocationRecord}
+          busyMap={locationBusy}
         />
         <RoutesPanel
           loading={isRefreshing && routes.length === 0}
           routes={routes}
+          onDelete={handleDeleteRouteRecord}
+          busyMap={routeBusy}
         />
       </div>
+
+      <RoadsPanel
+        loading={isRefreshing && roads.length === 0}
+        roads={roads}
+        onDelete={handleDeleteRoadRecord}
+        busyMap={roadBusy}
+      />
     </div>
   )
 }
@@ -354,9 +419,13 @@ function AdminBootstrapHint() {
 function LocationsPanel({
   loading,
   locations,
+  onDelete,
+  busyMap,
 }: {
   loading: boolean
   locations: AdminLocationRecord[]
+  onDelete: (locationId: number) => void | Promise<void>
+  busyMap: Record<number, boolean>
 }) {
   return (
     <div className="card p-6 space-y-4">
@@ -365,11 +434,12 @@ function LocationsPanel({
         <h2 className="text-display text-2xl font-black text-topo-brown">{locations.length} records</h2>
       </div>
       <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-4 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
-          <span className="px-3 py-2">Name</span>
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
+          <span className="px-3 py-2 col-span-2">Name</span>
           <span className="px-3 py-2">Type</span>
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Access</span>
+          <span className="px-3 py-2">Actions</span>
         </div>
         {loading ? (
           <SkeletonRow />
@@ -377,11 +447,20 @@ function LocationsPanel({
           <div className="p-4 text-mono text-sm text-contour">No locations have been created yet.</div>
         ) : (
           locations.map((loc) => (
-            <div key={loc.locationID} className="grid grid-cols-4 text-mono text-sm">
-              <span className="px-3 py-2 font-bold text-topo-brown">{loc.locationName}</span>
+            <div key={loc.locationID} className="grid grid-cols-5 items-center text-mono text-sm">
+              <span className="px-3 py-2 font-bold text-topo-brown col-span-2">{loc.locationName}</span>
               <span className="px-3 py-2 text-xs uppercase">{loc.locationType}</span>
               <span className="px-3 py-2 text-contour">{loc.owner}</span>
               <span className="px-3 py-2 text-xs">{loc.isPublic ? 'Public' : 'Private'}</span>
+              <span className="px-3 py-2">
+                <button
+                  className="btn btn-secondary text-2xs"
+                  onClick={() => onDelete(loc.locationID)}
+                  disabled={!!busyMap[loc.locationID]}
+                >
+                  {busyMap[loc.locationID] ? 'Removing…' : 'Remove'}
+                </button>
+              </span>
             </div>
           ))
         )}
@@ -393,9 +472,13 @@ function LocationsPanel({
 function RoutesPanel({
   loading,
   routes,
+  onDelete,
+  busyMap,
 }: {
   loading: boolean
   routes: AdminRouteRecord[]
+  onDelete: (routeId: number) => void | Promise<void>
+  busyMap: Record<number, boolean>
 }) {
   return (
     <div className="card p-6 space-y-4">
@@ -404,11 +487,12 @@ function RoutesPanel({
         <h2 className="text-display text-2xl font-black text-topo-brown">{routes.length} entries</h2>
       </div>
       <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-4 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Transport</span>
           <span className="px-3 py-2">Path</span>
           <span className="px-3 py-2">Metrics</span>
+          <span className="px-3 py-2">Actions</span>
         </div>
         {loading ? (
           <SkeletonRow />
@@ -416,7 +500,7 @@ function RoutesPanel({
           <div className="p-4 text-mono text-sm text-contour">No routes have been saved yet.</div>
         ) : (
           routes.map((route) => (
-            <div key={route.routeID} className="grid grid-cols-4 text-mono text-sm">
+            <div key={route.routeID} className="grid grid-cols-5 text-mono text-sm items-center">
               <span className="px-3 py-2 font-bold text-topo-brown">{route.owner}</span>
               <span className="px-3 py-2 text-xs uppercase">{route.transportType ?? '—'}</span>
               <span className="px-3 py-2 text-xs">
@@ -425,8 +509,86 @@ function RoutesPanel({
               <span className="px-3 py-2 text-xs">
                 {route.totalDistance} · {route.totalTime} · {route.totalCost}
               </span>
+              <span className="px-3 py-2">
+                <button
+                  className="btn btn-secondary text-2xs"
+                  onClick={() => onDelete(route.routeID)}
+                  disabled={!!busyMap[route.routeID]}
+                >
+                  {busyMap[route.routeID] ? 'Removing…' : 'Remove'}
+                </button>
+              </span>
             </div>
           ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RoadsPanel({
+  loading,
+  roads,
+  onDelete,
+  busyMap,
+}: {
+  loading: boolean
+  roads: AdminRoadRecord[]
+  onDelete: (roadId: number) => void | Promise<void>
+  busyMap: Record<number, boolean>
+}) {
+  const describeConnection = (conn: { locationName?: string | null; coordinate?: [number, number] | null; locationID?: number | null }) => {
+    if (conn.locationName) return conn.locationName
+    if (conn.coordinate) {
+      const [x, y] = conn.coordinate
+      return `[${x}, ${y}]`
+    }
+    if (conn.locationID) return `Location #${conn.locationID}`
+    return 'Unknown'
+  }
+
+  return (
+    <div className="card p-6 space-y-4">
+      <div>
+        <p className="text-mono text-2xs uppercase tracking-widest text-contour">Road Network</p>
+        <h2 className="text-display text-2xl font-black text-topo-brown">{roads.length} segments</h2>
+      </div>
+      <div className="border border-topo-brown divide-y divide-topo-brown/30">
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
+          <span className="px-3 py-2 col-span-2">Road</span>
+          <span className="px-3 py-2">Distance</span>
+          <span className="px-3 py-2">Status</span>
+          <span className="px-3 py-2">Actions</span>
+        </div>
+        {loading ? (
+          <SkeletonRow />
+        ) : roads.length === 0 ? (
+          <div className="p-4 text-mono text-sm text-contour">No road segments found.</div>
+        ) : (
+          roads.map((road) => {
+            const linkedNames = road.connectedLocations && road.connectedLocations.length > 0
+              ? road.connectedLocations.map((conn) => describeConnection(conn)).join(' ↔ ')
+              : 'Unlinked'
+            return (
+              <div key={road.roadID} className="grid grid-cols-5 text-mono text-sm items-center">
+                <span className="px-3 py-2 col-span-2">
+                  <span className="font-bold text-topo-brown">{road.roadName || `Road #${road.roadID}`}</span>
+                  <span className="block text-2xs text-contour">{linkedNames}</span>
+                </span>
+                <span className="px-3 py-2 text-xs">{road.distance} leagues</span>
+                <span className="px-3 py-2 text-xs">{road.roadType}</span>
+                <span className="px-3 py-2">
+                  <button
+                    className="btn btn-secondary text-2xs"
+                    onClick={() => onDelete(road.roadID)}
+                    disabled={!!busyMap[road.roadID]}
+                  >
+                    {busyMap[road.roadID] ? 'Removing…' : 'Remove'}
+                  </button>
+                </span>
+              </div>
+            )
+          })
         )}
       </div>
     </div>

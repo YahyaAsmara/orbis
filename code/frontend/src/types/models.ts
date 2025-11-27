@@ -51,6 +51,14 @@ export interface Road {
   roadName: string
   distance: number
   roadType: 'blocked' | 'unblocked'
+  connectedLocations?: RoadConnection[]
+}
+
+export interface RoadConnection {
+  locationID: number | null
+  locationName: string | null
+  coordinate?: [number, number] | null
+  owner?: string | null
 }
 
 export interface TimeRestriction {
@@ -209,3 +217,5 @@ export interface AdminRouteRecord {
   totalTime: string
   totalCost: string
 }
+
+export interface AdminRoadRecord extends Road {}

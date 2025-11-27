@@ -32,7 +32,7 @@ import re
 import math
 from itertools import combinations
 from functools import wraps
-from typing import Optional
+from typing import Optional, Mapping
 
 """
 Uses SQLAlchemy to connect to the database
@@ -315,29 +315,49 @@ def fetch_roads(connection):
         text(
             """
             SELECT
-                roadID      AS "roadID",
-                roadSegment AS "roadSegment",
-                roadName    AS "roadName",
-                distance    AS "distance",
-                roadType    AS "roadType"
-            FROM ROAD
-            ORDER BY roadID
+                r.roadID      AS "roadID",
+                r.roadSegment AS "roadSegment",
+                r.roadName    AS "roadName",
+                r.distance    AS "distance",
+                r.roadType    AS "roadType",
+                c.locationID  AS "locationID",
+                c.locationName AS "locationName",
+                c.coordinate  AS "coordinate",
+                u.username    AS "owner"
+            FROM ROAD r
+            LEFT JOIN CONNECTS_TO ct ON ct.roadID = r.roadID
+            LEFT JOIN CELL c ON c.locationID = ct.locationID
+            LEFT JOIN USERS u ON u.userID = c.createdBy
+            ORDER BY r.roadID
             """
         )
     ).mappings().all()
 
-    roads = []
+    roads = {}
     for row in rows:
-        segment = lseg_to_pair(row["roadSegment"])
-        roads.append({
-            "roadID": row["roadID"],
-            "roadSegment": segment,
-            "roadName": row["roadName"],
-            "distance": float(row["distance"]),
-            "roadType": row["roadType"],
-        })
+        road_id = row["roadID"]
+        if road_id not in roads:
+            segment = lseg_to_pair(row["roadSegment"])
+            roads[road_id] = {
+                "roadID": road_id,
+                "roadSegment": segment,
+                "roadName": row["roadName"],
+                "distance": float(row["distance"]),
+                "roadType": row["roadType"],
+                "connectedLocations": [],
+            }
 
-    return roads
+        if row["locationID"] is not None:
+            entry_list = roads[road_id]["connectedLocations"]
+            if not any(existing.get("locationID") == row["locationID"] for existing in entry_list):
+                entry_list.append({
+                    "locationID": row["locationID"],
+                    "locationName": row["locationName"],
+                    "coordinate": point_to_pair(row["coordinate"]),
+                    "owner": row["owner"],
+                })
+
+    return list(roads.values())
 
 
 def fetch_saved_routes(connection, user_id: int):
@@ -456,6 +476,85 @@ def ensure_triangular_roads_for_user(connection, user_id: int):
 
     for loc_a, loc_b in combinations(locations, 2):
         ensure_road_between_locations(connection, loc_a, loc_b)
+
+
+def prune_auto_roads_for_user(connection, user_id: int) -> int:
+    remaining_locations = fetch_locations(connection, user_id)
+    if len(remaining_locations) >= 3:
+        return 0
+
+    road_ids = connection.execute(
+        text(
+            """
+            SELECT r.roadID AS "roadID"
+            FROM ROAD r
+            WHERE r.roadName LIKE 'AutoRoute %'
+              AND (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM CONNECTS_TO ct
+                        WHERE ct.roadID = r.roadID
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM CONNECTS_TO ct
+                        JOIN CELL c ON c.locationID = ct.locationID
+                        WHERE ct.roadID = r.roadID
+                          AND c.createdBy <> :uid
+                    )
+                  )
+            """
+        ),
+        {"uid": user_id},
+    ).scalars().all()
+
+    removed = 0
+    for rid in road_ids:
+        connection.execute(
+            text("DELETE FROM CONNECTS_TO WHERE roadID = :rid"),
+            {"rid": rid},
+        )
+        result = connection.execute(
+            text("DELETE FROM ROAD WHERE roadID = :rid"),
+            {"rid": rid},
+        )
+        removed += result.rowcount or 0
+
+    return removed
+
+
+def delete_location_entry(connection, location_row: Mapping[str, object]):
+    coord_pair = point_to_pair(location_row.get("coordinate"))
+    if coord_pair is None:
+        raise ValueError("Location coordinate missing")
+
+    owner_id = location_row.get("createdBy")
+    if owner_id is None:
+        raise ValueError("Location owner missing")
+
+    x_coord, y_coord = coord_pair
+    deleted_routes = connection.execute(
+        text(
+            """
+            DELETE FROM TRAVEL_ROUTE
+            WHERE storedBy = :uid
+              AND (
+                    startCellCoord = point(:x, :y)
+                 OR endCellCoord = point(:x, :y)
+              )
+            """
+        ),
+        {"uid": owner_id, "x": x_coord, "y": y_coord},
+    )
+
+    connection.execute(
+        text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
+        {"lid": location_row.get("locationID"), "uid": owner_id},
+    )
+
+    pruned_roads = prune_auto_roads_for_user(connection, owner_id)
+
+    return deleted_routes.rowcount or 0, pruned_roads
 
 
 def delete_user_records(connection, user_id: int) -> bool:
@@ -765,7 +864,9 @@ def removeLocation(user_id):
             row = connection.execute(
                 text(
                     """
-                    SELECT coordinate AS "coordinate"
+                    SELECT locationID AS "locationID",
+                           coordinate AS "coordinate",
+                           createdBy AS "createdBy"
                     FROM CELL
                     WHERE locationID = :lid AND createdBy = :uid
                     FOR UPDATE
@@ -777,32 +878,13 @@ def removeLocation(user_id):
             if row is None:
                 return jsonify({"message": "Location not found"}), 404
 
-            coord_pair = point_to_pair(row["coordinate"]) if row.get("coordinate") is not None else None
-            if coord_pair is None:
-                return jsonify({"message": "Location coordinate missing"}), 400
+            removed_routes, pruned_roads = delete_location_entry(connection, row)
 
-            x_coord, y_coord = coord_pair
-
-            deleted_routes = connection.execute(
-                text(
-                    """
-                    DELETE FROM TRAVEL_ROUTE
-                    WHERE storedBy = :uid
-                      AND (
-                        startCellCoord = point(:x, :y)
-                        OR endCellCoord = point(:x, :y)
-                      )
-                    """
-                ),
-                {"uid": user_id, "x": x_coord, "y": y_coord},
-            )
-
-            connection.execute(
-                text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
-                {"lid": location_id, "uid": user_id},
-            )
-
-        return jsonify({"success": True, "removedRoutes": deleted_routes.rowcount}), 200
+        return jsonify({
+            "success": True,
+            "removedRoutes": removed_routes,
+            "prunedRoads": pruned_roads,
+        }), 200
     except SQLAlchemyError as exc:
         print("Error removing location", exc)
         return jsonify({"message": "Unable to remove location"}), 500
@@ -924,6 +1006,43 @@ def saveRoute(user_id):
                 transport_id = ensure_transport_mode_id(connection, transport_type)
             elif not transport_id_exists(connection, transport_id):
                 transport_id = ensure_transport_mode_id(connection, DEFAULT_TRANSPORT_TYPE)
+
+            existing_route_id = connection.execute(
+                text(
+                    """
+                    SELECT routeID AS "routeID"
+                    FROM TRAVEL_ROUTE
+                    WHERE storedBy = :storedBy
+                      AND modeOfTransportID = :mode
+                      AND startCellCoord = point(:sx, :sy)
+                      AND endCellCoord = point(:ex, :ey)
+                      AND travelTime = :travelTime
+                      AND totalDistance = :totalDistance
+                      AND totalCost = :totalCost
+                      AND directions = :directions
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "storedBy": user_id,
+                    "mode": transport_id,
+                    "sx": start[0],
+                    "sy": start[1],
+                    "ex": end[0],
+                    "ey": end[1],
+                    "travelTime": payload.get("travelTime", ""),
+                    "totalDistance": payload.get("totalDistance", ""),
+                    "totalCost": payload.get("totalCost", ""),
+                    "directions": payload.get("directions", []),
+                },
+            ).scalar_one_or_none()
+
+            if existing_route_id is not None:
+                return jsonify({
+                    "success": True,
+                    "routeID": existing_route_id,
+                    "duplicate": True,
+                }), 200
 
             route_id = connection.execute(
                 text(
@@ -1250,6 +1369,120 @@ def admin_all_routes():
     except SQLAlchemyError as exc:
         print("Error loading admin routes", exc)
         return jsonify({"message": "Unable to load routes"}), 500
+
+
+def delete_road_record(connection, road_id: int) -> bool:
+    restriction_names = connection.execute(
+        text(
+            """
+            SELECT restrictionName AS "name"
+            FROM TIME_RESTRICTION
+            WHERE roadID = :rid
+            """
+        ),
+        {"rid": road_id},
+    ).scalars().all()
+
+    for name in restriction_names:
+        connection.execute(
+            text("DELETE FROM RESTRICTEDTRANSPORT WHERE restrictionName = :name"),
+            {"name": name},
+        )
+
+    connection.execute(
+        text("DELETE FROM TIME_RESTRICTION WHERE roadID = :rid"),
+        {"rid": road_id},
+    )
+    connection.execute(
+        text("DELETE FROM CONNECTS_TO WHERE roadID = :rid"),
+        {"rid": road_id},
+    )
+    result = connection.execute(
+        text("DELETE FROM ROAD WHERE roadID = :rid"),
+        {"rid": road_id},
+    )
+    return result.rowcount > 0
+
+
+@webApp.route("/admin/locations/<int:location_id>", methods=["DELETE"])
+@require_auth(required_role="admin")
+def admin_delete_location(location_id):
+    try:
+        with db_engine.begin() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT locationID AS "locationID",
+                           coordinate AS "coordinate",
+                           createdBy AS "createdBy"
+                    FROM CELL
+                    WHERE locationID = :lid
+                    FOR UPDATE
+                    """
+                ),
+                {"lid": location_id},
+            ).mappings().fetchone()
+
+            if row is None:
+                return jsonify({"message": "Location not found"}), 404
+
+            removed_routes, pruned_roads = delete_location_entry(connection, row)
+
+        return jsonify({
+            "success": True,
+            "removedRoutes": removed_routes,
+            "prunedRoads": pruned_roads,
+        }), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting admin location", exc)
+        return jsonify({"message": "Unable to delete location"}), 500
+
+
+@webApp.route("/admin/routes/<int:route_id>", methods=["DELETE"])
+@require_auth(required_role="admin")
+def admin_delete_route(route_id):
+    try:
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text("DELETE FROM TRAVEL_ROUTE WHERE routeID = :rid"),
+                {"rid": route_id},
+            )
+
+        if result.rowcount == 0:
+            return jsonify({"message": "Route not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting admin route", exc)
+        return jsonify({"message": "Unable to delete route"}), 500
+
+
+@webApp.route("/admin/roads", methods=["GET"])
+@require_auth(required_role="admin")
+def admin_all_roads():
+    try:
+        with get_db_connection() as connection:
+            roads = fetch_roads(connection)
+        return jsonify(roads), 200
+    except SQLAlchemyError as exc:
+        print("Error loading admin roads", exc)
+        return jsonify({"message": "Unable to load roads"}), 500
+
+
+@webApp.route("/admin/roads/<int:road_id>", methods=["DELETE"])
+@require_auth(required_role="admin")
+def admin_delete_road(road_id):
+    try:
+        with db_engine.begin() as connection:
+            deleted = delete_road_record(connection, road_id)
+
+        if not deleted:
+            return jsonify({"message": "Road not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting admin road", exc)
+        return jsonify({"message": "Unable to delete road"}), 500
 
 
 @webApp.route("/admin/users/<int:target_id>", methods=["DELETE"])

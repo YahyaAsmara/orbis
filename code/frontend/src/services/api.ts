@@ -16,6 +16,7 @@ import type {
   UserRole,
   AdminLocationRecord,
   AdminRouteRecord,
+  AdminRoadRecord,
 } from '../types/models'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -241,6 +242,10 @@ export const adminAPI = {
     return apiRequest('/admin/routes', { method: 'GET' })
   },
 
+  async getRoads(): Promise<AdminRoadRecord[]> {
+    return apiRequest('/admin/roads', { method: 'GET' })
+  },
+
   async updateUserRole(userId: number, role: UserRole): Promise<{ success: boolean }> {
     return apiRequest(`/admin/users/${userId}/role`, {
       method: 'PATCH',
@@ -250,6 +255,18 @@ export const adminAPI = {
 
   async removeUser(userId: number): Promise<{ success: boolean }> {
     return apiRequest(`/admin/users/${userId}`, { method: 'DELETE' })
+  },
+
+  async deleteLocation(locationId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/admin/locations/${locationId}`, { method: 'DELETE' })
+  },
+
+  async deleteRoute(routeId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/admin/routes/${routeId}`, { method: 'DELETE' })
+  },
+
+  async deleteRoad(roadId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/admin/roads/${roadId}`, { method: 'DELETE' })
   },
 }
 

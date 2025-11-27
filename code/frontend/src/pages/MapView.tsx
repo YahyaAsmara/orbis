@@ -382,7 +382,7 @@ export default function MapView() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Map container */}
         <div className="lg:col-span-2">
-          <div className="card p-0 overflow-hidden">
+          <div className="card p-0 overflow-hidden relative">
             <MapContainer
               center={[0, 0]}
               zoom={4}
@@ -452,6 +452,7 @@ export default function MapView() {
                 />
               )}
             </MapContainer>
+            <MapLegend />
           </div>
 
           {(isAddingLocation && newLocationCoord) && (
@@ -803,6 +804,47 @@ function GridOverlay({ spacing = 1, extent = 64 }: { spacing?: number; extent?: 
         />
       ))}
     </>
+  )
+}
+
+function MapLegend() {
+  const markerEntries = Object.entries(LOCATION_ICON_META)
+
+  return (
+    <div className="absolute top-4 left-4 bg-topo-cream/90 border-2 border-topo-brown p-4 text-mono text-2xs w-64 space-y-3 shadow-lg">
+      <p className="uppercase tracking-widest text-2xs text-contour">Legend</p>
+      <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+        {markerEntries.map(([type, meta]) => (
+          <div key={type} className="flex items-center gap-2">
+            <span className="text-base" aria-hidden="true">{meta.emoji}</span>
+            <span className="uppercase truncate">{type.replace(/_/g, ' ')}</span>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-1">
+        <LegendLine color="#0c7c59" label="Open road" />
+        <LegendLine color="#b71540" label="Blocked road" dashed />
+        <LegendLine color="#d35400" label="Saved route" />
+        <p className="text-contour">Sand grid = snapped lattice (1 league)</p>
+      </div>
+    </div>
+  )
+}
+
+function LegendLine({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="inline-block"
+        style={{
+          width: '32px',
+          height: '3px',
+          backgroundColor: dashed ? 'transparent' : color,
+          borderTop: dashed ? `2px dashed ${color}` : undefined,
+        }}
+      />
+      <span>{label}</span>
+    </div>
   )
 }
 
