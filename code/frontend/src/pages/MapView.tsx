@@ -23,6 +23,13 @@ const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
   Walking: { speed: 5, costPerLeague: 0.0, description: 'Slowest option yet no cost and full flexibility' },
 }
 
+const TRANSPORT_MODE_IDS: Record<ModeOfTransport['transportType'], number> = {
+  Car: 1,
+  Bicycle: 2,
+  Bus: 3,
+  Walking: 4,
+}
+
 type RouteSummary = ComputePathResponse & {
   mode: ModeOfTransport['transportType']
   speed: number
@@ -64,11 +71,18 @@ export default function MapView() {
   const [loading, setLoading] = useState(false)
   const [graphSource, setGraphSource] = useState<'api' | 'fallback'>('api')
   const [graphError, setGraphError] = useState<string | null>(null)
+  const [isSavingRoute, setIsSavingRoute] = useState(false)
+  const [routeSaveFeedback, setRouteSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const userId = authAPI.getCurrentUserId()
 
   const handleRouteHistoryToggle = (routeId: string) => {
     setRouteHistory((prev) => prev.filter(route => route.id !== routeId))
+  }
+
+  const archiveRouteForOverlay = (route: RouteSummary | null) => {
+    if (!route) return
+    setRouteHistory((prev) => [...prev, { ...route, id: generateRouteId() }])
   }
 
   const FALLBACK_GRAPH: GraphResponse = {
@@ -225,6 +239,40 @@ export default function MapView() {
     }
   }
 
+  const persistCurrentRoute = async () => {
+    if (!userId || !routeSummary) {
+      setRouteSaveFeedback({ type: 'error', message: 'Compute a route before saving it to your profile.' })
+      return
+    }
+
+    const start = routeSummary.path[0]
+    const end = routeSummary.path[routeSummary.path.length - 1]
+    if (!start || !end) {
+      setRouteSaveFeedback({ type: 'error', message: 'Route is missing start or end coordinates.' })
+      return
+    }
+
+    setIsSavingRoute(true)
+    setRouteSaveFeedback(null)
+    try {
+      await routeAPI.saveRoute(userId, {
+        modeOfTransportID: TRANSPORT_MODE_IDS[routeSummary.mode],
+        startCellCoord: start,
+        endCellCoord: end,
+        travelTime: routeSummary.totalTime.toFixed(2),
+        totalDistance: routeSummary.totalDistance.toFixed(2),
+        totalCost: routeSummary.totalCost.toFixed(2),
+        directions: routeSummary.directions,
+      })
+      setRouteSaveFeedback({ type: 'success', message: 'Route saved to your profile. Check the Profile tab to review it.' })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      setRouteSaveFeedback({ type: 'error', message: `Failed to save route: ${message}` })
+    } finally {
+      setIsSavingRoute(false)
+    }
+  }
+
   return (
     <div className="animate-fade-in">
       {/* Header */}
@@ -363,19 +411,17 @@ export default function MapView() {
               keepPathVisible={keepRouteVisible}
               onToggleKeepPath={() => setKeepRouteVisible((prev) => !prev)}
               onClearRoute={() => {
-                if (routeSummary) {
-                  setRouteHistory((prev) => [...prev, { ...routeSummary, id: generateRouteId() }])
-                }
+                archiveRouteForOverlay(routeSummary)
                 setComputedPath(null)
                 setRouteSummary(null)
+                setRouteSaveFeedback(null)
               }}
               onPathComputed={(result: ComputePathResponse, mode: ModeOfTransport['transportType']) => {
                 const adjusted = adjustSummaryForTransport(result, mode)
-                if (routeSummary) {
-                  setRouteHistory((prev) => [...prev, { ...routeSummary, id: generateRouteId() }])
-                }
+                archiveRouteForOverlay(routeSummary)
                 setComputedPath(adjusted.path)
                 setRouteSummary(adjusted)
+                setRouteSaveFeedback(null)
                 if (!keepRouteVisible) {
                   setKeepRouteVisible(true)
                 }
@@ -383,6 +429,9 @@ export default function MapView() {
               graphSource={graphSource}
               routeHistory={routeHistory}
               onRouteHistoryToggle={handleRouteHistoryToggle}
+              onPersistRoute={persistCurrentRoute}
+              isSavingRoute={isSavingRoute}
+              saveFeedback={routeSaveFeedback}
             />
           ) : selectedLocation ? (
             <LocationDetail
@@ -677,6 +726,9 @@ function RoutePlanningPanel({
   onClearRoute,
   routeHistory,
   onRouteHistoryToggle,
+  onPersistRoute,
+  isSavingRoute,
+  saveFeedback,
 }: {
   locations: Location[]
   userId: number | null
@@ -688,6 +740,9 @@ function RoutePlanningPanel({
   onClearRoute: () => void
   routeHistory: StoredRoute[]
   onRouteHistoryToggle: (routeId: string) => void
+  onPersistRoute: () => void | Promise<void>
+  isSavingRoute: boolean
+  saveFeedback: { type: 'success' | 'error'; message: string } | null
 }) {
   const [startCoord, setStartCoord] = useState<[number, number] | null>(null)
   const [endCoord, setEndCoord] = useState<[number, number] | null>(null)
@@ -836,13 +891,28 @@ function RoutePlanningPanel({
               <input type="checkbox" checked={keepPathVisible} onChange={onToggleKeepPath} />
               Keep path visible on map
             </label>
-            <button
-              type="button"
-              onClick={onClearRoute}
-              className="btn btn-secondary text-xs"
-            >
-              Save route to overlay
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => { void onPersistRoute() }}
+                className="btn btn-primary text-xs"
+                disabled={isSavingRoute}
+              >
+                {isSavingRoute ? 'Saving route...' : 'Save route to profile'}
+              </button>
+              <button
+                type="button"
+                onClick={onClearRoute}
+                className="btn btn-secondary text-xs"
+              >
+                Save route to overlay
+              </button>
+            </div>
+            {saveFeedback && (
+              <p className={`text-mono text-xs ${saveFeedback.type === 'success' ? 'text-topo-green' : 'text-warn'}`}>
+                {saveFeedback.message}
+              </p>
+            )}
           </div>
         </div>
       )}
