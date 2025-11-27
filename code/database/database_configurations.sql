@@ -2,7 +2,7 @@
    File that is used to configure a database on Render
    Written to support PostgreSQL formatting (PostgreSQL is used on Render)
    
-   Author: Jason Duong
+   Author: Jason Duong, Yahya Asmara
 */
 
 --USER Table, now renamed USERS because of naming issues--

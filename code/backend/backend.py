@@ -1022,7 +1022,10 @@ def aStarSearch(user_id, start, end, pitstops, adjacency):
     for target in targets:
         segment_path, segment_cost = a_star(current, target, adjacency)
         if segment_path is None:
-            return None, None
+            # Fallback: draw a direct segment if the road graph lacks a path
+            direct_distance = heuristic(current, target)
+            segment_path = [current, target]
+            segment_cost = direct_distance
 
         # when chaining segments avoid duplicating junction point
         if full_path:
