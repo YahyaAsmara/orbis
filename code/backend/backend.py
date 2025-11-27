@@ -963,10 +963,14 @@ def get_admin_users():
                         FROM TRAVEL_ROUTE
                         GROUP BY storedBy
                     )
-                    SELECT u.userID, u.username, u.email, u.userRole,
-                           COALESCE(loc.total, 0) AS locations,
-                           COALESCE(rt.total, 0) AS savedRoutes,
-                           u.registrationDate AS lastActive
+                    SELECT
+                        u.userID AS "userID",
+                        u.username AS "username",
+                        u.email AS "email",
+                        u.userRole AS "userRole",
+                        COALESCE(loc.total, 0) AS "locations",
+                        COALESCE(rt.total, 0) AS "savedRoutes",
+                        u.registrationDate AS "lastActive"
                     FROM USERS u
                     LEFT JOIN location_counts loc ON loc.user_id = u.userID
                     LEFT JOIN route_counts rt ON rt.user_id = u.userID

@@ -3,12 +3,25 @@ import { Link } from 'react-router-dom'
 import { locationAPI, authAPI } from '../services/api'
 import type { Location } from '../types/models'
 
+type LocationEditForm = {
+  locationName: string
+  locationType: Location['locationType']
+  coordinate: [number, number]
+  maxCapacity: number
+  parkingSpaces: number
+  isPublic: boolean
+}
+
 export default function Places() {
   const [locations, setLocations] = useState<Location[]>([])
   const [filteredLocations, setFilteredLocations] = useState<Location[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<string>('All')
+  const [editingLocation, setEditingLocation] = useState<Location | null>(null)
+  const [editForm, setEditForm] = useState<LocationEditForm | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   const userId = authAPI.getCurrentUserId()
 
@@ -19,6 +32,22 @@ export default function Places() {
   useEffect(() => {
     filterLocations()
   }, [searchQuery, typeFilter, locations])
+
+  useEffect(() => {
+    if (editingLocation) {
+      setEditForm({
+        locationName: editingLocation.locationName,
+        locationType: editingLocation.locationType,
+        coordinate: [...editingLocation.coordinate] as [number, number],
+        maxCapacity: editingLocation.maxCapacity,
+        parkingSpaces: editingLocation.parkingSpaces,
+        isPublic: editingLocation.isPublic,
+      })
+      setEditError(null)
+    } else {
+      setEditForm(null)
+    }
+  }, [editingLocation])
 
   const loadLocations = async () => {
     if (!userId) return
@@ -52,6 +81,47 @@ export default function Places() {
   }
 
   const locationTypes = ['All', 'Hotel', 'Park', 'Cafe', 'Restaurant', 'Landmark', 'Gas_Station', 'Electric_Charging_Station']
+
+  const handleEditChange = (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number | boolean) => {
+    if (!editForm) return
+    setEditForm((prev) => (prev ? { ...prev, [field]: value } : prev))
+  }
+
+  const handleCoordinateChange = (index: 0 | 1, value: number) => {
+    setEditForm((prev) => {
+      if (!prev) return prev
+      const next = [...prev.coordinate] as [number, number]
+      next[index] = value
+      return { ...prev, coordinate: next }
+    })
+  }
+
+  const handleSaveLocation = async () => {
+    if (!userId || !editingLocation || !editForm) return
+    setSavingEdit(true)
+    setEditError(null)
+    try {
+      await locationAPI.updateLocation(userId, editingLocation.locationID, {
+        locationName: editForm.locationName,
+        locationType: editForm.locationType,
+        coordinate: editForm.coordinate,
+        maxCapacity: editForm.maxCapacity,
+        parkingSpaces: editForm.parkingSpaces,
+        isPublic: editForm.isPublic,
+      })
+      setLocations((prev) => prev.map((loc) => (
+        loc.locationID === editingLocation.locationID
+          ? { ...loc, ...editForm }
+          : loc
+      )))
+      setEditingLocation(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to update location'
+      setEditError(message)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -132,21 +202,37 @@ export default function Places() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredLocations.map((location) => (
-            <LocationCard key={location.locationID} location={location} />
+            <LocationCard
+              key={location.locationID}
+              location={location}
+              onEdit={() => setEditingLocation(location)}
+            />
           ))}
         </div>
+      )}
+
+      {editingLocation && editForm && (
+        <EditLocationModal
+          location={editingLocation}
+          form={editForm}
+          onChange={handleEditChange}
+          onCoordinateChange={handleCoordinateChange}
+          onClose={() => setEditingLocation(null)}
+          onSave={handleSaveLocation}
+          saving={savingEdit}
+          error={editError}
+        />
       )}
     </div>
   )
 }
 
 // Location card component
-function LocationCard({ location }: { location: Location }) {
+function LocationCard({ location, onEdit }: { location: Location, onEdit: () => void }) {
   const icon = getLocationIcon(location.locationType)
 
   return (
-    <Link to={`/places/${location.locationID}`}>
-      <div className="card p-6 group hover:translate-x-2 hover:translate-y-2 transition-all duration-150 h-full">
+    <div className="card p-6 group hover:translate-x-2 hover:translate-y-2 transition-all duration-150 h-full">
         <div className="flex items-start gap-4">
           <div className="text-4xl">{icon}</div>
           
@@ -179,10 +265,16 @@ function LocationCard({ location }: { location: Location }) {
                 [{location.coordinate[0].toFixed(2)}, {location.coordinate[1].toFixed(2)}]
               </div>
             </div>
+            <button
+              className="btn btn-secondary text-2xs mt-4"
+              onClick={onEdit}
+            >
+              Edit details
+            </button>
           </div>
         </div>
       </div>
-    </Link>
+    </div>
   )
 }
 
@@ -197,4 +289,135 @@ function getLocationIcon(type: string) {
     Electric_Charging_Station: '🔋',
   }
   return icons[type] || '📍'
+}
+
+function EditLocationModal({
+  location,
+  form,
+  onChange,
+  onCoordinateChange,
+  onClose,
+  onSave,
+  saving,
+  error,
+}: {
+  location: Location
+  form: LocationEditForm
+  onChange: (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number | boolean) => void
+  onCoordinateChange: (index: 0 | 1, value: number) => void
+  onClose: () => void
+  onSave: () => Promise<void> | void
+  saving: boolean
+  error: string | null
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white w-full max-w-xl shadow-2xl border-4 border-topo-brown">
+        <div className="flex items-start justify-between p-4 border-b border-topo-brown">
+          <div>
+            <p className="text-mono text-2xs uppercase text-contour">Editing Location</p>
+            <h3 className="text-mono text-xl font-bold">{location.locationName}</h3>
+          </div>
+          <button onClick={onClose} className="text-contour hover:text-topo-brown">✕</button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {error && (
+            <div className="text-warn text-mono text-xs">{error}</div>
+          )}
+
+          <div>
+            <label className="block text-mono text-xs uppercase mb-1">Name</label>
+            <input
+              type="text"
+              className="input"
+              value={form.locationName}
+              onChange={(e) => onChange('locationName', e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-mono text-xs uppercase mb-1">Type</label>
+              <select
+                className="input"
+                value={form.locationType}
+                onChange={(e) => onChange('locationType', e.target.value as Location['locationType'])}
+              >
+                <option>Hotel</option>
+                <option>Park</option>
+                <option>Cafe</option>
+                <option>Restaurant</option>
+                <option>Landmark</option>
+                <option>Gas_Station</option>
+                <option>Electric_Charging_Station</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-mono text-xs uppercase mb-1">Access</label>
+              <select
+                className="input"
+                value={form.isPublic ? 'public' : 'private'}
+                onChange={(e) => onChange('isPublic', e.target.value === 'public')}
+              >
+                <option value="public">Public</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-mono text-xs uppercase mb-1">Capacity</label>
+              <input
+                type="number"
+                className="input"
+                value={form.maxCapacity}
+                min={0}
+                onChange={(e) => onChange('maxCapacity', parseInt(e.target.value, 10) || 0)}
+              />
+            </div>
+            <div>
+              <label className="block text-mono text-xs uppercase mb-1">Parking</label>
+              <input
+                type="number"
+                className="input"
+                value={form.parkingSpaces}
+                min={0}
+                onChange={(e) => onChange('parkingSpaces', parseInt(e.target.value, 10) || 0)}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-mono text-xs uppercase mb-1">Coordinates</label>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="number"
+                className="input"
+                value={form.coordinate[0]}
+                onChange={(e) => onCoordinateChange(0, parseFloat(e.target.value) || 0)}
+              />
+              <input
+                type="number"
+                className="input"
+                value={form.coordinate[1]}
+                onChange={(e) => onCoordinateChange(1, parseFloat(e.target.value) || 0)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-topo-brown flex justify-end gap-3">
+          <button className="btn btn-secondary text-xs" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button className="btn btn-primary text-xs" onClick={() => { void onSave() }} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
