@@ -12,6 +12,24 @@ import type {
   ModeOfTransport,
 } from '../types/models'
 
+const TRANSPORT_PROFILES: Record<ModeOfTransport['transportType'], {
+  speed: number
+  costPerLeague: number
+  description: string
+}> = {
+  Car: { speed: 60, costPerLeague: 4.2, description: 'Fuel + tolls impact travel time moderately' },
+  Bicycle: { speed: 18, costPerLeague: 0.2, description: 'Muscle-powered, zero emissions but slower pace' },
+  Bus: { speed: 40, costPerLeague: 1.6, description: 'Shared transit, steady pace with low personal cost' },
+  Walking: { speed: 5, costPerLeague: 0.0, description: 'Slowest option yet no cost and full flexibility' },
+}
+
+type RouteSummary = ComputePathResponse & {
+  mode: ModeOfTransport['transportType']
+  speed: number
+  costPerLeague: number
+  description: string
+}
+
 // Fix for default marker icons in Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -28,7 +46,7 @@ export default function MapView() {
   const [newLocationCoord, setNewLocationCoord] = useState<[number, number] | null>(null)
   const [showRoutePanel, setShowRoutePanel] = useState(false)
   const [computedPath, setComputedPath] = useState<[number, number][] | null>(null)
-  const [routeSummary, setRouteSummary] = useState<ComputePathResponse | null>(null)
+  const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null)
   const [keepRouteVisible, setKeepRouteVisible] = useState(true)
   const [loading, setLoading] = useState(false)
   const [graphSource, setGraphSource] = useState<'api' | 'fallback'>('api')
@@ -160,10 +178,30 @@ export default function MapView() {
       await locationAPI.removeLocation(userId, target.locationID)
       await loadGraph()
       setSelectedLocation(null)
+      setComputedPath(null)
+      setRouteSummary(null)
+      setKeepRouteVisible(false)
     } catch (err) {
       alert('Failed to remove location: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const adjustSummaryForTransport = (result: ComputePathResponse, mode: ModeOfTransport['transportType']): RouteSummary => {
+    const profile = TRANSPORT_PROFILES[mode]
+    const distance = result.totalDistance
+    const hours = distance / profile.speed
+    const cost = distance * profile.costPerLeague
+
+    return {
+      ...result,
+      totalTime: Number(hours.toFixed(2)),
+      totalCost: Number(cost.toFixed(2)),
+      mode,
+      speed: profile.speed,
+      costPerLeague: profile.costPerLeague,
+      description: profile.description,
     }
   }
 
@@ -299,9 +337,10 @@ export default function MapView() {
                 setComputedPath(null)
                 setRouteSummary(null)
               }}
-              onPathComputed={(result) => {
-                setComputedPath(result.path)
-                setRouteSummary(result)
+              onPathComputed={(result: ComputePathResponse, mode: ModeOfTransport['transportType']) => {
+                const adjusted = adjustSummaryForTransport(result, mode)
+                setComputedPath(adjusted.path)
+                setRouteSummary(adjusted)
                 if (!keepRouteVisible) {
                   setKeepRouteVisible(true)
                 }
@@ -602,9 +641,9 @@ function RoutePlanningPanel({
 }: {
   locations: Location[]
   userId: number | null
-  onPathComputed: (result: ComputePathResponse) => void
+  onPathComputed: (result: ComputePathResponse, mode: ModeOfTransport['transportType']) => void
   graphSource: 'api' | 'fallback'
-  summary: ComputePathResponse | null
+  summary: RouteSummary | null
   keepPathVisible: boolean
   onToggleKeepPath: () => void
   onClearRoute: () => void
@@ -641,10 +680,10 @@ function RoutePlanningPanel({
         timeOfDay: new Date().toISOString(),
       }
       const result = await routeAPI.computePath(userId, request)
-      onPathComputed(result)
+      onPathComputed(result, transportType)
     } catch (err) {
       if (graphSource === 'fallback' && startCoord && endCoord) {
-        onPathComputed(buildFallbackSummary(startCoord, endCoord))
+        onPathComputed(buildFallbackSummary(startCoord, endCoord), transportType)
       } else {
         alert('Failed to compute path: ' + (err instanceof Error ? err.message : 'Unknown error'))
       }
@@ -721,6 +760,12 @@ function RoutePlanningPanel({
 
       {summary && (
         <div className="mt-6 space-y-4">
+          <div className="text-mono text-xs text-contour">
+            Mode: <span className="font-bold text-topo-brown">{summary.mode}</span>
+            {' '}• Cruise ~{summary.speed} leagues/hr • Cost {summary.costPerLeague.toFixed(2)} credits/league
+            <p className="text-topo-brown mt-1">{summary.description}</p>
+          </div>
+
           <div className="grid grid-cols-3 gap-3 text-center">
             <div className="border-2 border-topo-brown p-3">
               <p className="text-mono text-2xs uppercase text-contour">Distance</p>
