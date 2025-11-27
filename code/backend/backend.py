@@ -130,11 +130,7 @@ def hash_password(pwd):
 Helper function to verify a stored password against one provided by the user
 """
 def verify_password(stored_pwd, provided_pwd):
-    # TODO: figure out how DB will store password hash for sure
-    if isinstance(stored_pwd, memoryview):
-        stored_pwd = stored_pwd.tobytes()
-    elif isinstance(stored_pwd, str):
-        stored_pwd = stored_pwd.encode("utf-8")
+    stored_pwd = stored_pwd.encode("utf-8")
 
     return bcrypt.checkpw(provided_pwd.encode("utf-8"), stored_pwd)
 
@@ -723,7 +719,6 @@ def createAccount():
             "success": False,
             "message": "Internal server error"
         }), 500
-    #TODO: Add entry in DB for user graph, copy it from some defaults value table OR if you want to store the default graph somewhere else, grab it and put it in the user's entry
 
 """
 Function that runs when the user attempts to sign in
