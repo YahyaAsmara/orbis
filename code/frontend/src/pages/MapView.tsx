@@ -8,6 +8,7 @@ import type {
   GraphResponse,
   AddLocationRequest,
   ComputePathRequest,
+  ComputePathResponse,
   ModeOfTransport,
 } from '../types/models'
 
@@ -27,6 +28,8 @@ export default function MapView() {
   const [newLocationCoord, setNewLocationCoord] = useState<[number, number] | null>(null)
   const [showRoutePanel, setShowRoutePanel] = useState(false)
   const [computedPath, setComputedPath] = useState<[number, number][] | null>(null)
+  const [routeSummary, setRouteSummary] = useState<ComputePathResponse | null>(null)
+  const [keepRouteVisible, setKeepRouteVisible] = useState(true)
   const [loading, setLoading] = useState(false)
   const [graphSource, setGraphSource] = useState<'api' | 'fallback'>('api')
   const [graphError, setGraphError] = useState<string | null>(null)
@@ -255,7 +258,7 @@ export default function MapView() {
               ))}
 
               {/* Render computed path */}
-              {computedPath && (
+              {computedPath && keepRouteVisible && (
                 <Polyline
                   positions={computedPath}
                   pathOptions={{ color: '#d35400', weight: 4 }}
@@ -289,7 +292,20 @@ export default function MapView() {
             <RoutePlanningPanel
               locations={locations}
               userId={userId}
-              onPathComputed={(path) => setComputedPath(path)}
+              summary={routeSummary}
+              keepPathVisible={keepRouteVisible}
+              onToggleKeepPath={() => setKeepRouteVisible((prev) => !prev)}
+              onClearRoute={() => {
+                setComputedPath(null)
+                setRouteSummary(null)
+              }}
+              onPathComputed={(result) => {
+                setComputedPath(result.path)
+                setRouteSummary(result)
+                if (!keepRouteVisible) {
+                  setKeepRouteVisible(true)
+                }
+              }}
               graphSource={graphSource}
             />
           ) : selectedLocation ? (
@@ -579,16 +595,39 @@ function RoutePlanningPanel({
   userId,
   onPathComputed,
   graphSource,
+  summary,
+  keepPathVisible,
+  onToggleKeepPath,
+  onClearRoute,
 }: {
   locations: Location[]
   userId: number | null
-  onPathComputed: (path: [number, number][]) => void
+  onPathComputed: (result: ComputePathResponse) => void
   graphSource: 'api' | 'fallback'
+  summary: ComputePathResponse | null
+  keepPathVisible: boolean
+  onToggleKeepPath: () => void
+  onClearRoute: () => void
 }) {
   const [startCoord, setStartCoord] = useState<[number, number] | null>(null)
   const [endCoord, setEndCoord] = useState<[number, number] | null>(null)
   const [transportType, setTransportType] = useState<ModeOfTransport['transportType']>('Car')
   const [loading, setLoading] = useState(false)
+
+  const computeChebyshevDistance = (a: [number, number], b: [number, number]) =>
+    Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]))
+
+  const buildFallbackSummary = (start: [number, number], end: [number, number]): ComputePathResponse => {
+    const distance = computeChebyshevDistance(start, end)
+    return {
+      path: [start, end],
+      totalDistance: Number(distance.toFixed(2)),
+      totalTime: Number(distance.toFixed(2)),
+      totalCost: 0,
+      directions: [`Travel from (${start[0]}, ${start[1]}) to (${end[0]}, ${end[1]})`],
+      closedAreas: [],
+    }
+  }
 
   const handleComputePath = async () => {
     if (!userId || !startCoord || !endCoord) return
@@ -602,11 +641,10 @@ function RoutePlanningPanel({
         timeOfDay: new Date().toISOString(),
       }
       const result = await routeAPI.computePath(userId, request)
-      onPathComputed(result.path)
+      onPathComputed(result)
     } catch (err) {
       if (graphSource === 'fallback' && startCoord && endCoord) {
-        // simple straight-line fallback route on atlas grid
-        onPathComputed([startCoord, endCoord])
+        onPathComputed(buildFallbackSummary(startCoord, endCoord))
       } else {
         alert('Failed to compute path: ' + (err instanceof Error ? err.message : 'Unknown error'))
       }
@@ -680,6 +718,48 @@ function RoutePlanningPanel({
           {loading ? 'Computing...' : 'Compute Route →'}
         </button>
       </div>
+
+      {summary && (
+        <div className="mt-6 space-y-4">
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="border-2 border-topo-brown p-3">
+              <p className="text-mono text-2xs uppercase text-contour">Distance</p>
+              <p className="text-mono text-base font-bold">{summary.totalDistance.toFixed(2)} leagues</p>
+            </div>
+            <div className="border-2 border-topo-brown p-3">
+              <p className="text-mono text-2xs uppercase text-contour">Time</p>
+              <p className="text-mono text-base font-bold">{summary.totalTime.toFixed(2)} hrs</p>
+            </div>
+            <div className="border-2 border-topo-brown p-3">
+              <p className="text-mono text-2xs uppercase text-contour">Cost</p>
+              <p className="text-mono text-base font-bold">{summary.totalCost.toFixed(2)} credits</p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-mono text-xs uppercase text-contour mb-2">Directions</p>
+            <ul className="text-mono text-xs space-y-1 max-h-40 overflow-y-auto border-2 border-topo-brown p-3">
+              {summary.directions.map((step, idx) => (
+                <li key={idx}>{idx + 1}. {step}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="flex flex-col gap-3 text-mono text-xs">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={keepPathVisible} onChange={onToggleKeepPath} />
+              Keep path visible on map
+            </label>
+            <button
+              type="button"
+              onClick={onClearRoute}
+              className="btn btn-secondary text-xs"
+            >
+              Clear Route
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
