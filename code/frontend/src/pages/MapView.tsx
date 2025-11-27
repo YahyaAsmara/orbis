@@ -30,6 +30,17 @@ type RouteSummary = ComputePathResponse & {
   description: string
 }
 
+interface StoredRoute extends RouteSummary {
+  id: string
+}
+
+const generateRouteId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `route-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 // Fix for default marker icons in Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -47,12 +58,17 @@ export default function MapView() {
   const [showRoutePanel, setShowRoutePanel] = useState(false)
   const [computedPath, setComputedPath] = useState<[number, number][] | null>(null)
   const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null)
+  const [routeHistory, setRouteHistory] = useState<StoredRoute[]>([])
   const [keepRouteVisible, setKeepRouteVisible] = useState(true)
   const [loading, setLoading] = useState(false)
   const [graphSource, setGraphSource] = useState<'api' | 'fallback'>('api')
   const [graphError, setGraphError] = useState<string | null>(null)
 
   const userId = authAPI.getCurrentUserId()
+
+  const handleRouteHistoryToggle = (routeId: string) => {
+    setRouteHistory((prev) => prev.filter(route => route.id !== routeId))
+  }
 
   const FALLBACK_GRAPH: GraphResponse = {
     locations: [
@@ -180,6 +196,9 @@ export default function MapView() {
       setSelectedLocation(null)
       setComputedPath(null)
       setRouteSummary(null)
+      setRouteHistory((prev) => prev.filter(route => !route.path.some(([x, y]) =>
+        x === target.coordinate[0] && y === target.coordinate[1]
+      )))
       setKeepRouteVisible(false)
     } catch (err) {
       alert('Failed to remove location: ' + (err instanceof Error ? err.message : 'Unknown error'))
@@ -295,7 +314,16 @@ export default function MapView() {
                 </Marker>
               ))}
 
-              {/* Render computed path */}
+              {/* Render prior routes */}
+              {routeHistory.map((route) => (
+                <Polyline
+                  key={route.id}
+                  positions={route.path}
+                  pathOptions={{ color: '#d35400', weight: 3, opacity: 0.6 }}
+                />
+              ))}
+
+              {/* Render active computed path */}
               {computedPath && keepRouteVisible && (
                 <Polyline
                   positions={computedPath}
@@ -334,6 +362,9 @@ export default function MapView() {
               keepPathVisible={keepRouteVisible}
               onToggleKeepPath={() => setKeepRouteVisible((prev) => !prev)}
               onClearRoute={() => {
+                if (routeSummary) {
+                  setRouteHistory((prev) => [...prev, { ...routeSummary, id: generateRouteId() }])
+                }
                 setComputedPath(null)
                 setRouteSummary(null)
               }}
@@ -346,6 +377,8 @@ export default function MapView() {
                 }
               }}
               graphSource={graphSource}
+              routeHistory={routeHistory}
+              onRouteHistoryToggle={handleRouteHistoryToggle}
             />
           ) : selectedLocation ? (
             <LocationDetail
@@ -638,6 +671,8 @@ function RoutePlanningPanel({
   keepPathVisible,
   onToggleKeepPath,
   onClearRoute,
+  routeHistory,
+  onRouteHistoryToggle,
 }: {
   locations: Location[]
   userId: number | null
@@ -647,6 +682,8 @@ function RoutePlanningPanel({
   keepPathVisible: boolean
   onToggleKeepPath: () => void
   onClearRoute: () => void
+  routeHistory: StoredRoute[]
+  onRouteHistoryToggle: (routeId: string) => void
 }) {
   const [startCoord, setStartCoord] = useState<[number, number] | null>(null)
   const [endCoord, setEndCoord] = useState<[number, number] | null>(null)
@@ -800,9 +837,26 @@ function RoutePlanningPanel({
               onClick={onClearRoute}
               className="btn btn-secondary text-xs"
             >
-              Clear Route
+              Save route to overlay
             </button>
           </div>
+        </div>
+      )}
+
+      {routeHistory.length > 0 && (
+        <div className="mt-6 border-2 border-topo-brown p-3 space-y-2">
+          <p className="text-mono text-xs uppercase text-contour">Overlayed Routes</p>
+          {routeHistory.map((route) => (
+            <div key={route.id} className="flex items-center justify-between text-mono text-xs">
+              <span>{route.mode} • {route.totalDistance.toFixed(1)} leagues</span>
+              <button
+                className="text-topo-brown underline"
+                onClick={() => onRouteHistoryToggle(route.id)}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
