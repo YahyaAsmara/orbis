@@ -211,10 +211,10 @@ def lseg_to_pair(value):
 
 def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
     normalized = transport_type if transport_type in TRANSPORT_MODE_DEFAULTS else DEFAULT_TRANSPORT_TYPE
-    existing = connection.execute(
+    existing_id = connection.execute(
         text(
             """
-            SELECT transportID AS "transportID"
+            SELECT transportID
             FROM MODE_OF_TRANSPORT
             WHERE transportType = :tt
             ORDER BY transportID
@@ -222,13 +222,13 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
             """
         ),
         {"tt": normalized},
-    ).mappings().fetchone()
+    ).scalar_one_or_none()
 
-    if existing:
-        return existing["transportID"]
+    if existing_id is not None:
+        return existing_id
 
     defaults = TRANSPORT_MODE_DEFAULTS.get(normalized, TRANSPORT_MODE_DEFAULTS[DEFAULT_TRANSPORT_TYPE])
-    created = connection.execute(
+    created_id = connection.execute(
         text(
             """
             INSERT INTO MODE_OF_TRANSPORT (speedMultiplier, isEcoFriendly, transportType, energyEfficiency)
@@ -242,9 +242,9 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
             "transportType": normalized,
             "energyEfficiency": defaults["energyEfficiency"],
         },
-    ).mappings().fetchone()
+    ).scalar_one()
 
-    return created["transportID"]
+    return created_id
 
 
 def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
