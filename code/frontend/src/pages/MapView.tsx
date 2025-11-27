@@ -382,7 +382,7 @@ export default function MapView() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Map container */}
         <div className="lg:col-span-2">
-          <div className="card p-0 overflow-hidden relative">
+          <div className="card p-0 overflow-hidden">
             <MapContainer
               center={[0, 0]}
               zoom={4}
@@ -452,7 +452,6 @@ export default function MapView() {
                 />
               )}
             </MapContainer>
-            <MapLegend />
           </div>
 
           {(isAddingLocation && newLocationCoord) && (
@@ -521,6 +520,8 @@ export default function MapView() {
           )}
         </div>
       </div>
+
+      <MapLegend />
 
       <div className="mt-8 card p-6 bg-topo-cream border-4 border-topo-brown">
         <h3 className="text-mono text-sm uppercase tracking-wider font-bold mb-4">
@@ -811,17 +812,17 @@ function MapLegend() {
   const markerEntries = Object.entries(LOCATION_ICON_META)
 
   return (
-    <div className="absolute top-4 left-4 bg-topo-cream/90 border-2 border-topo-brown p-4 text-mono text-2xs w-64 space-y-3 shadow-lg">
-      <p className="uppercase tracking-widest text-2xs text-contour">Legend</p>
-      <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+    <div className="mt-6 card p-6 bg-topo-cream border-4 border-topo-brown">
+      <p className="text-mono text-2xs uppercase tracking-widest text-contour">Map Legend</p>
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-4 text-mono text-2xs">
         {markerEntries.map(([type, meta]) => (
           <div key={type} className="flex items-center gap-2">
-            <span className="text-base" aria-hidden="true">{meta.emoji}</span>
+            <span className="text-lg" aria-hidden="true">{meta.emoji}</span>
             <span className="uppercase truncate">{type.replace(/_/g, ' ')}</span>
           </div>
         ))}
       </div>
-      <div className="space-y-1">
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-mono text-xs">
         <LegendLine color="#0c7c59" label="Open road" />
         <LegendLine color="#b71540" label="Blocked road" dashed />
         <LegendLine color="#d35400" label="Saved route" />

@@ -427,43 +427,66 @@ function LocationsPanel({
   onDelete: (locationId: number) => void | Promise<void>
   busyMap: Record<number, boolean>
 }) {
+  const [query, setQuery] = useState('')
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    if (!term) return locations
+    return locations.filter((loc) =>
+      loc.locationName.toLowerCase().includes(term) ||
+      loc.owner.toLowerCase().includes(term) ||
+      loc.locationType.toLowerCase().includes(term)
+    )
+  }, [locations, query])
+
   return (
-    <div className="card p-6 space-y-4">
-      <div>
-        <p className="text-mono text-2xs uppercase tracking-widest text-contour">All Locations</p>
-        <h2 className="text-display text-2xl font-black text-topo-brown">{locations.length} records</h2>
+    <div className="card p-5 space-y-4">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <p className="text-mono text-2xs uppercase tracking-widest text-contour">All Locations</p>
+          <span className="text-mono text-2xs text-contour">{filtered.length} shown</span>
+        </div>
+        <div className="flex flex-col gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, owner, type"
+            className="input text-2xs"
+          />
+        </div>
       </div>
-      <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
+      <div className="border border-topo-brown">
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
           <span className="px-3 py-2 col-span-2">Name</span>
           <span className="px-3 py-2">Type</span>
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Access</span>
-          <span className="px-3 py-2">Actions</span>
+          <span className="px-3 py-2 text-right">Actions</span>
         </div>
-        {loading ? (
-          <SkeletonRow />
-        ) : locations.length === 0 ? (
-          <div className="p-4 text-mono text-sm text-contour">No locations have been created yet.</div>
-        ) : (
-          locations.map((loc) => (
-            <div key={loc.locationID} className="grid grid-cols-5 items-center text-mono text-sm">
-              <span className="px-3 py-2 font-bold text-topo-brown col-span-2">{loc.locationName}</span>
-              <span className="px-3 py-2 text-xs uppercase">{loc.locationType}</span>
-              <span className="px-3 py-2 text-contour">{loc.owner}</span>
-              <span className="px-3 py-2 text-xs">{loc.isPublic ? 'Public' : 'Private'}</span>
-              <span className="px-3 py-2">
-                <button
-                  className="btn btn-secondary text-2xs"
-                  onClick={() => onDelete(loc.locationID)}
-                  disabled={!!busyMap[loc.locationID]}
-                >
-                  {busyMap[loc.locationID] ? 'Removing…' : 'Remove'}
-                </button>
-              </span>
-            </div>
-          ))
-        )}
+        <div className="max-h-80 overflow-y-auto divide-y divide-topo-brown/30">
+          {loading ? (
+            <SkeletonRow />
+          ) : filtered.length === 0 ? (
+            <div className="p-4 text-mono text-sm text-contour">No locations match your search.</div>
+          ) : (
+            filtered.map((loc) => (
+              <div key={loc.locationID} className="grid grid-cols-5 items-center text-mono text-sm">
+                <span className="px-3 py-2 font-bold text-topo-brown col-span-2">{loc.locationName}</span>
+                <span className="px-3 py-2 text-2xs uppercase">{loc.locationType}</span>
+                <span className="px-3 py-2 text-contour">{loc.owner}</span>
+                <span className="px-3 py-2 text-2xs">{loc.isPublic ? 'Public' : 'Private'}</span>
+                <span className="px-3 py-2 text-right">
+                  <button
+                    className="text-mono text-2xs uppercase tracking-widest underline"
+                    onClick={() => onDelete(loc.locationID)}
+                    disabled={!!busyMap[loc.locationID]}
+                  >
+                    {busyMap[loc.locationID] ? 'Removing…' : 'Remove'}
+                  </button>
+                </span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   )
@@ -480,47 +503,69 @@ function RoutesPanel({
   onDelete: (routeId: number) => void | Promise<void>
   busyMap: Record<number, boolean>
 }) {
+  const [query, setQuery] = useState('')
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    if (!term) return routes
+    return routes.filter((route) => {
+      const ownerMatch = route.owner.toLowerCase().includes(term)
+      const transportMatch = (route.transportType ?? '').toLowerCase().includes(term)
+      const coord = `${route.startCellCoord.join(',')} ${route.endCellCoord.join(',')}`.toLowerCase()
+      return ownerMatch || transportMatch || coord.includes(term)
+    })
+  }, [routes, query])
+
   return (
-    <div className="card p-6 space-y-4">
-      <div>
-        <p className="text-mono text-2xs uppercase tracking-widest text-contour">Saved Routes</p>
-        <h2 className="text-display text-2xl font-black text-topo-brown">{routes.length} entries</h2>
+    <div className="card p-5 space-y-4">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <p className="text-mono text-2xs uppercase tracking-widest text-contour">Saved Routes</p>
+          <span className="text-mono text-2xs text-contour">{filtered.length} shown</span>
+        </div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by owner, transport, coordinate"
+          className="input text-2xs"
+        />
       </div>
-      <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream">
+      <div className="border border-topo-brown">
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-green text-topo-cream sticky top-0">
           <span className="px-3 py-2">Owner</span>
           <span className="px-3 py-2">Transport</span>
           <span className="px-3 py-2">Path</span>
           <span className="px-3 py-2">Metrics</span>
-          <span className="px-3 py-2">Actions</span>
+          <span className="px-3 py-2 text-right">Actions</span>
         </div>
-        {loading ? (
-          <SkeletonRow />
-        ) : routes.length === 0 ? (
-          <div className="p-4 text-mono text-sm text-contour">No routes have been saved yet.</div>
-        ) : (
-          routes.map((route) => (
-            <div key={route.routeID} className="grid grid-cols-5 text-mono text-sm items-center">
-              <span className="px-3 py-2 font-bold text-topo-brown">{route.owner}</span>
-              <span className="px-3 py-2 text-xs uppercase">{route.transportType ?? '—'}</span>
-              <span className="px-3 py-2 text-xs">
-                [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
-              </span>
-              <span className="px-3 py-2 text-xs">
-                {route.totalDistance} · {route.totalTime} · {route.totalCost}
-              </span>
-              <span className="px-3 py-2">
-                <button
-                  className="btn btn-secondary text-2xs"
-                  onClick={() => onDelete(route.routeID)}
-                  disabled={!!busyMap[route.routeID]}
-                >
-                  {busyMap[route.routeID] ? 'Removing…' : 'Remove'}
-                </button>
-              </span>
-            </div>
-          ))
-        )}
+        <div className="max-h-80 overflow-y-auto divide-y divide-topo-brown/30">
+          {loading ? (
+            <SkeletonRow />
+          ) : filtered.length === 0 ? (
+            <div className="p-4 text-mono text-sm text-contour">No routes match your search.</div>
+          ) : (
+            filtered.map((route) => (
+              <div key={route.routeID} className="grid grid-cols-5 text-mono text-sm items-center">
+                <span className="px-3 py-2 font-bold text-topo-brown">{route.owner}</span>
+                <span className="px-3 py-2 text-2xs uppercase">{route.transportType ?? '—'}</span>
+                <span className="px-3 py-2 text-2xs">
+                  [{route.startCellCoord[0]}, {route.startCellCoord[1]}] → [{route.endCellCoord[0]}, {route.endCellCoord[1]}]
+                </span>
+                <span className="px-3 py-2 text-2xs">
+                  {route.totalDistance} · {route.totalTime} · {route.totalCost}
+                </span>
+                <span className="px-3 py-2 text-right">
+                  <button
+                    className="text-mono text-2xs uppercase tracking-widest underline"
+                    onClick={() => onDelete(route.routeID)}
+                    disabled={!!busyMap[route.routeID]}
+                  >
+                    {busyMap[route.routeID] ? 'Removing…' : 'Remove'}
+                  </button>
+                </span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   )
@@ -537,6 +582,18 @@ function RoadsPanel({
   onDelete: (roadId: number) => void | Promise<void>
   busyMap: Record<number, boolean>
 }) {
+  const [query, setQuery] = useState('')
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    if (!term) return roads
+    return roads.filter((road) => {
+      const name = (road.roadName || '').toLowerCase()
+      const connections = road.connectedLocations?.map((conn) => conn.locationName?.toLowerCase() ?? '').join(' ') ?? ''
+      const status = road.roadType.toLowerCase()
+      return name.includes(term) || connections.includes(term) || status.includes(term)
+    })
+  }, [roads, query])
+
   const describeConnection = (conn: { locationName?: string | null; coordinate?: [number, number] | null; locationID?: number | null }) => {
     if (conn.locationName) return conn.locationName
     if (conn.coordinate) {
@@ -548,24 +605,33 @@ function RoadsPanel({
   }
 
   return (
-    <div className="card p-6 space-y-4">
-      <div>
-        <p className="text-mono text-2xs uppercase tracking-widest text-contour">Road Network</p>
-        <h2 className="text-display text-2xl font-black text-topo-brown">{roads.length} segments</h2>
+    <div className="card p-5 space-y-4">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <p className="text-mono text-2xs uppercase tracking-widest text-contour">Road Network</p>
+          <span className="text-mono text-2xs text-contour">{filtered.length} shown</span>
+        </div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name, link, status"
+          className="input text-2xs"
+        />
       </div>
-      <div className="border border-topo-brown divide-y divide-topo-brown/30">
-        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream">
+      <div className="border border-topo-brown">
+        <div className="grid grid-cols-5 text-mono text-2xs uppercase tracking-widest bg-topo-brown text-topo-cream sticky top-0">
           <span className="px-3 py-2 col-span-2">Road</span>
           <span className="px-3 py-2">Distance</span>
           <span className="px-3 py-2">Status</span>
-          <span className="px-3 py-2">Actions</span>
+          <span className="px-3 py-2 text-right">Actions</span>
         </div>
-        {loading ? (
-          <SkeletonRow />
-        ) : roads.length === 0 ? (
-          <div className="p-4 text-mono text-sm text-contour">No road segments found.</div>
-        ) : (
-          roads.map((road) => {
+        <div className="max-h-80 overflow-y-auto divide-y divide-topo-brown/30">
+          {loading ? (
+            <SkeletonRow />
+          ) : filtered.length === 0 ? (
+            <div className="p-4 text-mono text-sm text-contour">No roads match your search.</div>
+          ) : (
+            filtered.map((road) => {
             const linkedNames = road.connectedLocations && road.connectedLocations.length > 0
               ? road.connectedLocations.map((conn) => describeConnection(conn)).join(' ↔ ')
               : 'Unlinked'
@@ -577,19 +643,20 @@ function RoadsPanel({
                 </span>
                 <span className="px-3 py-2 text-xs">{road.distance} leagues</span>
                 <span className="px-3 py-2 text-xs">{road.roadType}</span>
-                <span className="px-3 py-2">
-                  <button
-                    className="btn btn-secondary text-2xs"
-                    onClick={() => onDelete(road.roadID)}
-                    disabled={!!busyMap[road.roadID]}
-                  >
-                    {busyMap[road.roadID] ? 'Removing…' : 'Remove'}
-                  </button>
-                </span>
+                  <span className="px-3 py-2 text-right">
+                    <button
+                      className="text-mono text-2xs uppercase tracking-widest underline"
+                      onClick={() => onDelete(road.roadID)}
+                      disabled={!!busyMap[road.roadID]}
+                    >
+                      {busyMap[road.roadID] ? 'Removing…' : 'Remove'}
+                    </button>
+                  </span>
               </div>
             )
-          })
-        )}
+            })
+          )}
+        </div>
       </div>
     </div>
   )
