@@ -159,27 +159,42 @@ def decode_access_token(token: str) -> dict:
     return jwt.decode(token, SECRET_KEY, algorithms=[jwt_algo])
 
 
+"""
+Basic helper function used to connect to the database
+"""
 def get_db_connection():
     return db_engine.connect()
 
 
 
-
+"""
+Enforce authentication rules on route handlers
+"""
 def require_auth(required_role: str | None = None, enforce_user_match: bool = False):
+    """
+
+    :param required_role: if provided then only users with this role can access this route
+    :param enforce_user_match: if True then ensure that the authenticated user matches the user_id in the route
+    :return:
+    """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            #extract authorization header and ensure it starts with Bearer
             auth_header = request.headers.get('Authorization', '')
             if not auth_header.startswith('Bearer '):
                 return jsonify({"message": "Missing or invalid Authorization header"}), 401
 
+            #extract JWT token from header
             token = auth_header.split(' ', 1)[1].strip()
             try:
+                #decode and validate the JWT token
                 payload = decode_access_token(token)
             except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
                 return jsonify({"message": "Invalid or expired token"}), 401
-
+            #extract the authenticated user's ID from the token payload
             user_id = int(payload.get('sub'))
+            #look the user up in the database to ensure they still exist and get their role
             with get_db_connection() as connection:
                 row = connection.execute(
                     text(
@@ -191,26 +206,28 @@ def require_auth(required_role: str | None = None, enforce_user_match: bool = Fa
                     ),
                     {"uid": user_id},
                 ).mappings().fetchone()
-
+            #user not found, deny access
             if row is None:
                 return jsonify({"message": "User not found"}), 401
 
             role = row["userRole"]
+            #enforce role requirement if required
             if required_role and role != required_role:
                 return jsonify({"message": "Forbidden"}), 403
 
+            #enforce user_id match when required
             if enforce_user_match:
                 path_user = kwargs.get('user_id') or request.view_args.get('user_id')
                 if path_user is not None and int(path_user) != user_id:
                     return jsonify({"message": "Forbidden"}), 403
-
+            #store authenticated user info in Flask global context
             g.current_user = {
                 "user_id": user_id,
                 "username": row["username"],
                 "email": row["email"],
                 "role": role,
             }
-
+            #proceed to protected route handler
             return func(*args, **kwargs)
 
         return wrapper
@@ -248,9 +265,9 @@ def createAccount():
             "message": "Username must be at least 3 characters in length."
         }), 400
 
-    pwd_hash = hash_password(password)
-    reg_date = datetime.utcnow().date().isoformat()
-    default_role = "mapper"
+    pwd_hash = hash_password(password)#hash the password for security in the database
+    reg_date = datetime.utcnow().date().isoformat() #date of account creation (now)
+    default_role = "mapper" #provide default role to user which is a mapper, normal user
 
     try:
         with db_engine.begin() as connection:
@@ -328,6 +345,7 @@ def signIn():
         }), 400
 
     try:
+        #try to find user
         with get_db_connection() as connection:
             user_row = connection.execute(
                 text(
@@ -339,7 +357,7 @@ def signIn():
                 ),
                 {"username": username},
             ).mappings().fetchone()
-
+        #user not found
         if user_row is None:
             return jsonify({
                 "success": False,
@@ -351,14 +369,16 @@ def signIn():
         pwd_hash = user_row["userPassword"]
         role = user_row["userRole"]
 
+        #verify password hash
         if not verify_password(pwd_hash, password):
             return jsonify({
                 "success": False,
                 "message": "Invalid password."
             }), 401
-
+        #create access token
         access_token = create_access_token(user_id, role)
 
+        #return information in an orderly fashion
         return jsonify({
             "success": True,
             "message": "User logged in successfully.",
@@ -370,7 +390,7 @@ def signIn():
                 "token": access_token
             }
         }), 200
-
+    #error handling
     except SQLAlchemyError as e:
         print("Error: ", e)
         return jsonify({
