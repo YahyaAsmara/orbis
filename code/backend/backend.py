@@ -401,7 +401,9 @@ def signIn():
 
 #--API Methods for Frontend--
 
-
+"""
+Convert various point formats into [x, y] float pair 
+"""
 def point_to_pair(value):
     if value is None:
         return None
@@ -422,7 +424,9 @@ def point_to_pair(value):
 
     raise ValueError(f"Unable to parse coordinate value: {value}")
 
-
+"""
+Convert various line segment formats into [[x1, y1], [x2, y2]] coordinate pairs
+"""
 def lseg_to_pair(value):
     if value is None:
         return None
@@ -430,6 +434,7 @@ def lseg_to_pair(value):
     if isinstance(value, (list, tuple)) and len(value) == 2:
         return [point_to_pair(value[0]), point_to_pair(value[1])]
 
+    #parse "(x1,y1),(x2,y2)" style string
     if isinstance(value, str):
         parts = re.findall(r"\(([^)]+)\)", value)
         if len(parts) >= 2:
@@ -443,7 +448,10 @@ def lseg_to_pair(value):
 
     raise ValueError(f"Unable to parse line segment value: {value}")
 
-
+"""
+Ensure transport mode exists
+Return its ID or create it using default values 
+"""
 def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
     normalized = transport_type if transport_type in TRANSPORT_MODE_DEFAULTS else DEFAULT_TRANSPORT_TYPE
     existing_id = connection.execute(
@@ -459,9 +467,11 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
         {"tt": normalized},
     ).scalar_one_or_none()
 
+    #if it does exist, return its ID
     if existing_id is not None:
         return existing_id
 
+    #does not exist so create a transport mode with a ID
     defaults = TRANSPORT_MODE_DEFAULTS.get(normalized, TRANSPORT_MODE_DEFAULTS[DEFAULT_TRANSPORT_TYPE])
     created_id = connection.execute(
         text(
@@ -479,9 +489,12 @@ def ensure_transport_mode_id(connection, transport_type: str | None) -> int:
         },
     ).scalar_one()
 
-    return created_id
+    return created_id #return the ID of the created transport ID
 
-
+"""
+Check whether a transport mode with the given ID exists in the database
+Obviously do not want two transport modes with the same ID
+"""
 def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
     if transport_id is None:
         return False
@@ -492,13 +505,18 @@ def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
     ).fetchone()
     return row is not None
 
-
+"""
+Preload all default transport modes into the database if missing
+"""
 def bootstrap_transport_modes():
     with db_engine.begin() as connection:
         for transport_type in TRANSPORT_MODE_DEFAULTS:
             ensure_transport_mode_id(connection, transport_type)
 
-
+"""
+Initialize transport modes at startup
+Ignore failures but provide warning if needed
+"""
 try:
     bootstrap_transport_modes()
 except SQLAlchemyError as exc:
