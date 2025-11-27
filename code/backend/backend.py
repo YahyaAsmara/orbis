@@ -802,21 +802,28 @@ def prune_auto_roads_for_user(connection, user_id: int) -> int:
     return removed
 
 
+#----Deletion related functions---
+
+"""
+Delete a single location entry and its associated routes 
+Prune auto generated roads afterwards
+"""
 def delete_location_entry(connection, location_row: Mapping[str, object]):
-    normalized = dict(location_row)
-    coord_pair = point_to_pair(normalized.get("coordinate"))
+    normalized = dict(location_row) #normalize into mutable dict
+    coord_pair = point_to_pair(normalized.get("coordinate")) #parse coordinate into [x,y]
     if coord_pair is None:
         raise ValueError("Location coordinate missing")
 
-    owner_id = normalized.get("createdBy")
+    owner_id = normalized.get("createdBy") #extract owning user_id
     if owner_id is None:
         raise ValueError("Location owner missing")
 
-    location_id = normalized.get("locationID")
+    location_id = normalized.get("locationID") #extract location_id
     if location_id is None:
         raise ValueError("Location ID missing")
 
     x_coord, y_coord = coord_pair
+    #delete all routes where this location is either the start or end point
     deleted_routes = connection.execute(
         text(
             """
@@ -830,26 +837,33 @@ def delete_location_entry(connection, location_row: Mapping[str, object]):
         ),
         {"uid": owner_id, "x": x_coord, "y": y_coord},
     )
-
+    #remove location itself
     connection.execute(
         text("DELETE FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
         {"lid": location_id, "uid": owner_id},
     )
 
-    pruned_roads = prune_auto_roads_for_user(connection, owner_id)
+    pruned_roads = prune_auto_roads_for_user(connection, owner_id) #clean up
 
-    return deleted_routes.rowcount or 0, pruned_roads
+    return deleted_routes.rowcount or 0, pruned_roads #return number of routes deleted and roads pruned
 
 
+"""
+Delete all records belonging to a specific user
+This includes routes, locations, user account itself
+"""
 def delete_user_records(connection, user_id: int) -> bool:
+    #remove all routes
     connection.execute(
         text("DELETE FROM TRAVEL_ROUTE WHERE storedBy = :uid"),
         {"uid": user_id},
     )
+    #remove all locations created by that user
     connection.execute(
         text("DELETE FROM CELL WHERE createdBy = :uid"),
         {"uid": user_id},
     )
+    #remove the user themselves
     result = connection.execute(
         text("DELETE FROM USERS WHERE userID = :uid"),
         {"uid": user_id},
