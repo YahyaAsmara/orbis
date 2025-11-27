@@ -2,7 +2,7 @@
    File that is used to configure a database on Render
    Written to support PostgreSQL formatting (PostgreSQL is used on Render)
    
-   Author: Jason Duong, Yahya Asmara
+   Author: Jason Duong
 */
 
 --USER Table, now renamed USERS because of naming issues--
@@ -36,7 +36,7 @@ CREATE TABLE CELL(
 CREATE TABLE LANDMARK(
    landmarkName TEXT,
    locationID INTEGER, 
-   FOREIGN KEY (locationID) REFERENCES CELL(locationID), --Foreign key locationID links to locationID in cell
+   FOREIGN KEY (locationID) REFERENCES CELL(locationID) ON DELETE CASCADE, --Foreign key locationID links to locationID in cell
    PRIMARY KEY (landmarkName, locationID), --Composite primary key
    landmarkDescription TEXT,
    category TEXT CHECK (category IN ('Mountain', 'River', 'Lake', 'In_City', 'Other')) NOT NULL --ensure category is an element in the given list
@@ -55,9 +55,9 @@ CREATE TABLE CURRENCY(
 --ACCEPTS table (CELL ACCEPTS CURRENCY relationship)--
 CREATE TABLE ACCEPTS(
    currencyName TEXT,
-   FOREIGN KEY (currencyName) REFERENCES CURRENCY(currencyName),
+   FOREIGN KEY (currencyName) REFERENCES CURRENCY(currencyName) ON DELETE CASCADE, --If referenced currency is deleted, delete this tuple too
    locationID INTEGER,
-   FOREIGN KEY (locationID) REFERENCES CELL(locationID),
+   FOREIGN KEY (locationID) REFERENCES CELL(locationID) ON DELETE CASCADE, --If referenced location is deleted, delete this tuple too
    PRIMARY KEY (currencyName, locationID)
 );
 ------------------------------------------------------
@@ -78,7 +78,7 @@ CREATE TABLE CONNECTS_TO(
    roadID INTEGER,
    FOREIGN KEY (roadID) REFERENCES ROAD(roadID),
    locationID INTEGER,
-   FOREIGN KEY (locationID) REFERENCES CELL(locationID),
+   FOREIGN KEY (locationID) REFERENCES CELL(locationID) ON DELETE CASCADE,
    PRIMARY KEY (roadID, locationID)
 );
 ----------------------------------------------------------
