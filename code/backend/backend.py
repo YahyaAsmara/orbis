@@ -523,7 +523,13 @@ except SQLAlchemyError as exc:
     print("Warning: unable to bootstrap transport modes", exc)
 
 
+#----Road related functions----
+
+"""
+Fetch all locations created by a specific user (through their user_id)
+"""
 def fetch_locations(connection, user_id: int):
+    #select rows with all information related to location
     rows = connection.execute(
         text(
             """
@@ -545,6 +551,7 @@ def fetch_locations(connection, user_id: int):
     ).mappings().all()
 
     locations = []
+    #add info to the locations list
     for row in rows:
         coord = point_to_pair(row["coordinate"])
         locations.append({
@@ -558,10 +565,13 @@ def fetch_locations(connection, user_id: int):
             "createdBy": row["createdBy"],
         })
 
-    return locations
+    return locations #return list
 
-
+"""
+Fetch all roads and their related information
+"""
 def fetch_roads(connection):
+    #select rows with all information related to the road
     rows = connection.execute(
         text(
             """
@@ -585,8 +595,10 @@ def fetch_roads(connection):
     ).mappings().all()
 
     roads = {}
+    #add information to dict
     for row in rows:
         road_id = row["roadID"]
+        #build base road entry if not created yet
         if road_id not in roads:
             segment = lseg_to_pair(row["roadSegment"])
             roads[road_id] = {
@@ -597,7 +609,7 @@ def fetch_roads(connection):
                 "roadType": row["roadType"],
                 "connectedLocations": [],
             }
-
+        #attach connected locations without duplicates
         if row["locationID"] is not None:
             entry_list = roads[road_id]["connectedLocations"]
             if not any(existing.get("locationID") == row["locationID"] for existing in entry_list):
@@ -608,9 +620,11 @@ def fetch_roads(connection):
                     "owner": row["owner"],
                 })
 
-    return list(roads.values())
+    return list(roads.values()) #return the information as a list of values
 
-
+"""
+Fetch all saved routes created by a specific user (through their user_id)
+"""
 def fetch_saved_routes(connection, user_id: int):
     rows = connection.execute(
         text(
@@ -650,7 +664,9 @@ def fetch_saved_routes(connection, user_id: int):
 
     return routes
 
-
+"""
+Ensure a road-location relationship exists (ignoring duplicates)
+"""
 def ensure_connects_to(connection, road_id: int, location_id: int):
     connection.execute(
         text(
@@ -663,7 +679,9 @@ def ensure_connects_to(connection, road_id: int, location_id: int):
         {"road_id": road_id, "location_id": location_id},
     )
 
-
+"""
+Check if a road segment already exists between two coordinates
+"""
 def road_segment_exists(connection, coord_a, coord_b):
     return connection.execute(
         text(
@@ -683,7 +701,9 @@ def road_segment_exists(connection, coord_a, coord_b):
         },
     ).scalar_one_or_none()
 
-
+"""
+Ensure a road exists between two locations and create one if it doesn't
+"""
 def ensure_road_between_locations(connection, loc_a, loc_b):
     coord_a = tuple(loc_a["coordinate"])
     coord_b = tuple(loc_b["coordinate"])
@@ -691,11 +711,13 @@ def ensure_road_between_locations(connection, loc_a, loc_b):
         return
 
     existing = road_segment_exists(connection, coord_a, coord_b)
+    #exists!
     if existing is not None:
         ensure_connects_to(connection, existing, loc_a["locationID"])
         ensure_connects_to(connection, existing, loc_b["locationID"])
         return
 
+    #does not exist so create one
     distance = math.dist(coord_a, coord_b)
     road_name = f"AutoRoute {loc_a['locationID']}↔{loc_b['locationID']}"
     road_id = connection.execute(
@@ -719,7 +741,10 @@ def ensure_road_between_locations(connection, loc_a, loc_b):
     ensure_connects_to(connection, road_id, loc_a["locationID"])
     ensure_connects_to(connection, road_id, loc_b["locationID"])
 
-
+"""
+Ensure triangular road connections for a user
+Meaning, a road between every pair of locations
+"""
 def ensure_triangular_roads_for_user(connection, user_id: int):
     locations = fetch_locations(connection, user_id)
     if len(locations) < 3:
@@ -729,6 +754,9 @@ def ensure_triangular_roads_for_user(connection, user_id: int):
         ensure_road_between_locations(connection, loc_a, loc_b)
 
 
+"""
+Remove auto generated roads if a user does not have enough locations
+"""
 def prune_auto_roads_for_user(connection, user_id: int) -> int:
     remaining_locations = fetch_locations(connection, user_id)
     if len(remaining_locations) >= 3:
