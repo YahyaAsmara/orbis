@@ -315,14 +315,20 @@ def require_auth(required_role: str | None = None, enforce_user_match: bool = Fa
             user_id = int(payload.get('sub'))
             with get_db_connection() as connection:
                 row = connection.execute(
-                    text("SELECT userID, username, email, userRole FROM USERS WHERE userID = :uid"),
+                    text(
+                        """
+                        SELECT userID AS "userID", username, email, userRole AS "userRole"
+                        FROM USERS
+                        WHERE userID = :uid
+                        """
+                    ),
                     {"uid": user_id},
-                ).fetchone()
+                ).mappings().fetchone()
 
             if row is None:
                 return jsonify({"message": "User not found"}), 401
 
-            role = row.userRole
+            role = row["userRole"]
             if required_role and role != required_role:
                 return jsonify({"message": "Forbidden"}), 403
 
@@ -333,8 +339,8 @@ def require_auth(required_role: str | None = None, enforce_user_match: bool = Fa
 
             g.current_user = {
                 "user_id": user_id,
-                "username": row.username,
-                "email": row.email,
+                "username": row["username"],
+                "email": row["email"],
                 "role": role,
             }
 
