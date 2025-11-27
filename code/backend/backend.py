@@ -783,13 +783,18 @@ def getProfileData(user_id):
             user_row = connection.execute(
                 text(
                     """
-                    SELECT userID, email, registrationDate, username, userRole
+                    SELECT
+                        userID AS "userID",
+                        email AS "email",
+                        registrationDate AS "registrationDate",
+                        username AS "username",
+                        userRole AS "userRole"
                     FROM USERS
                     WHERE userID = :uid
                     """
                 ),
                 {"uid": user_id},
-            ).fetchone()
+            ).mappings().fetchone()
 
             if user_row is None:
                 return jsonify({"message": "User not found"}), 404
@@ -798,11 +803,11 @@ def getProfileData(user_id):
             routes = fetch_saved_routes(connection, user_id)
 
         user_payload = {
-            "userID": user_row.userID,
-            "email": user_row.email,
-            "registrationDate": user_row.registrationDate,
-            "username": user_row.username,
-            "role": user_row.userRole,
+            "userID": user_row["userID"],
+            "email": user_row["email"],
+            "registrationDate": user_row["registrationDate"],
+            "username": user_row["username"],
+            "role": user_row["userRole"],
         }
 
         return jsonify({"user": user_payload, "locations": locations, "savedRoutes": routes}), 200
