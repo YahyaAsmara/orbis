@@ -896,7 +896,6 @@ def fetch_saved_routes(connection, user_id: int):
                 tr.travelTime       AS "travelTime",
                 tr.totalDistance    AS "totalDistance",
                 tr.totalCost        AS "totalCost",
-                tr.directions       AS "directions",
                 v.vehicleName       AS "vehicleName",
                 v.ownedBy           AS "ownerID",
                 mot.transportType   AS "transportType"
@@ -912,7 +911,6 @@ def fetch_saved_routes(connection, user_id: int):
 
     routes = []
     for row in rows:
-        directions = row["directions"] if isinstance(row["directions"], list) else []
         routes.append({
             "routeID": row["routeID"],
             "storedBy": row["ownerID"],
@@ -925,7 +923,7 @@ def fetch_saved_routes(connection, user_id: int):
             "travelTime": row["travelTime"],
             "totalDistance": row["totalDistance"],
             "totalCost": row["totalCost"],
-            "directions": directions,
+            "directions": [],
         })
 
     return routes
@@ -1909,8 +1907,7 @@ def saveRoute(user_id):
                       AND tr.endCellCoord = point(:ex, :ey)
                       AND tr.travelTime = :travelTime
                       AND tr.totalDistance = :totalDistance
-                      AND tr.totalCost = :totalCost
-                      AND tr.directions = :directions
+                                            AND tr.totalCost = :totalCost
                     LIMIT 1
                     """
                 ),
@@ -1924,8 +1921,7 @@ def saveRoute(user_id):
                     "ey": end[1],
                     "travelTime": payload.get("travelTime", ""),
                     "totalDistance": payload.get("totalDistance", ""),
-                    "totalCost": payload.get("totalCost", ""),
-                    "directions": payload.get("directions", []),
+                                        "totalCost": payload.get("totalCost", ""),
                 },
             ).scalar_one_or_none()
 
@@ -1941,10 +1937,10 @@ def saveRoute(user_id):
                     """
                     INSERT INTO TRAVEL_ROUTE (
                         modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
-                        travelTime, totalDistance, totalCost, directions
+                        travelTime, totalDistance, totalCost
                     ) VALUES (
                         :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
-                        :travelTime, :totalDistance, :totalCost, :directions
+                        :travelTime, :totalDistance, :totalCost
                     )
                     RETURNING routeID
                     """
@@ -1959,7 +1955,6 @@ def saveRoute(user_id):
                     "travelTime": payload.get("travelTime", ""),
                     "totalDistance": payload.get("totalDistance", ""),
                     "totalCost": payload.get("totalCost", ""),
-                    "directions": payload.get("directions", []),
                 },
             ).scalar_one()
 
