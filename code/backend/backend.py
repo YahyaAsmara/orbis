@@ -110,6 +110,27 @@ LOCATION_TYPE_ACCESS = {
     "Electric_Charging_Station": False,
 }
 
+LANDMARK_CATEGORIES = {"Mountain", "River", "Lake", "In_City", "Other"}
+
+DEFAULT_CURRENCY_REFERENCE = [
+    {"currencyName": "Solari", "currencySymbol": "SOL", "baseRate": 1.0},
+    {"currencyName": "Lumen", "currencySymbol": "LMN", "baseRate": 1.35},
+    {"currencyName": "Astra", "currencySymbol": "AST", "baseRate": 0.78},
+    {"currencyName": "HarborMark", "currencySymbol": "HRM", "baseRate": 1.9},
+]
+
+CURRENCY_REFERENCE_LOOKUP = {entry["currencyName"]: entry for entry in DEFAULT_CURRENCY_REFERENCE}
+
+DEFAULT_VEHICLE_REFERENCE = [
+    {"vehicleName": "Trailblazer SUV", "transportType": "Car", "passengerCapacity": 5},
+    {"vehicleName": "MetroLink Bus", "transportType": "Bus", "passengerCapacity": 40},
+    {"vehicleName": "Courier Van", "transportType": "Car", "passengerCapacity": 2},
+    {"vehicleName": "City Flyer Bike", "transportType": "Bicycle", "passengerCapacity": 1},
+    {"vehicleName": "Ridge Hopper", "transportType": "Walking", "passengerCapacity": 1},
+]
+
+VEHICLE_REFERENCE_LOOKUP = {entry["vehicleName"]: entry for entry in DEFAULT_VEHICLE_REFERENCE}
+
 """
 Create a Flask instance of the current file.
 __name__ denotes the current file, value varies by whether this file is imported or ran directly.
@@ -534,6 +555,13 @@ def ensure_location_type_row(connection, location_type: str) -> None:
         {"lt": location_type, "public": LOCATION_TYPE_ACCESS[location_type]},
     )
 
+
+def _format_exchange_rate(value: float) -> str:
+    formatted = f"{value:.6f}"
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+    return formatted or "0"
+
 """
 Preload all default transport modes into the database if missing
 """
@@ -549,14 +577,206 @@ def bootstrap_location_types():
             ensure_location_type_row(connection, location_type)
 
 
+def bootstrap_currency_reference():
+    with db_engine.begin() as connection:
+        for currency in DEFAULT_CURRENCY_REFERENCE:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO CURRENCY (currencyName, currencySymbol)
+                    VALUES (:name, :symbol)
+                    ON CONFLICT (currencyName)
+                    DO UPDATE SET currencySymbol = EXCLUDED.currencySymbol
+                    """
+                ),
+                {"name": currency["currencyName"], "symbol": currency["currencySymbol"]},
+            )
+
+        for base in DEFAULT_CURRENCY_REFERENCE:
+            for target in DEFAULT_CURRENCY_REFERENCE:
+                if base["currencyName"] == target["currencyName"]:
+                    continue
+
+                rate = target["baseRate"] / base["baseRate"]
+                connection.execute(
+                    text("DELETE FROM EXCHANGES_TO WHERE currencyFrom = :source AND currencyTo = :target"),
+                    {"source": base["currencyName"], "target": target["currencyName"]},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO EXCHANGES_TO (currencyFrom, currencyTo, exchangeRate)
+                        VALUES (:source, :target, :rate)
+                        """
+                    ),
+                    {
+                        "source": base["currencyName"],
+                        "target": target["currencyName"],
+                        "rate": _format_exchange_rate(rate),
+                    },
+                )
+
+
+def bootstrap_vehicle_reference():
+    with db_engine.begin() as connection:
+        for entry in DEFAULT_VEHICLE_REFERENCE:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO VEHICLE_INFO (vehicleName, passengerCapacity)
+                    VALUES (:name, :capacity)
+                    ON CONFLICT (vehicleName)
+                    DO UPDATE SET passengerCapacity = EXCLUDED.passengerCapacity
+                    """
+                ),
+                {"name": entry["vehicleName"], "capacity": entry["passengerCapacity"]},
+            )
+
+
 try:
     bootstrap_transport_modes()
     bootstrap_location_types()
+    bootstrap_currency_reference()
+    bootstrap_vehicle_reference()
 except SQLAlchemyError as exc:
     print("Warning: unable to bootstrap reference data", exc)
 
 
 #----Road related functions----
+
+
+def currency_exists(connection, currency_name: Optional[str]) -> bool:
+    if not currency_name:
+        return False
+
+    row = connection.execute(
+        text("SELECT 1 FROM CURRENCY WHERE currencyName = :name"),
+        {"name": currency_name},
+    ).scalar_one_or_none()
+    return row is not None
+
+
+def location_owned_by_user(connection, user_id: int, location_id: int) -> bool:
+    row = connection.execute(
+        text("SELECT 1 FROM CELL WHERE locationID = :lid AND createdBy = :uid"),
+        {"lid": location_id, "uid": user_id},
+    ).scalar_one_or_none()
+    return row is not None
+
+
+def build_currency_map(connection, user_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT a.locationID AS "locationID",
+                   a.currencyName AS "currencyName",
+                   c.currencySymbol AS "currencySymbol"
+            FROM ACCEPTS a
+            JOIN CURRENCY c ON c.currencyName = a.currencyName
+            JOIN CELL cell ON cell.locationID = a.locationID
+            WHERE cell.createdBy = :uid
+            ORDER BY a.locationID, a.currencyName
+            """
+        ),
+        {"uid": user_id},
+    ).mappings().all()
+
+    mapping = defaultdict(list)
+    for row in rows:
+        mapping[row["locationID"]].append({
+            "currencyName": row["currencyName"],
+            "currencySymbol": row["currencySymbol"],
+        })
+    return mapping
+
+
+def build_landmark_map(connection, user_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT l.locationID AS "locationID",
+                   l.landmarkName AS "landmarkName",
+                   l.landmarkDescription AS "landmarkDescription",
+                   l.category AS "category"
+            FROM LANDMARK l
+            JOIN CELL cell ON cell.locationID = l.locationID
+            WHERE cell.createdBy = :uid
+            ORDER BY l.locationID, l.landmarkName
+            """
+        ),
+        {"uid": user_id},
+    ).mappings().all()
+
+    mapping = defaultdict(list)
+    for row in rows:
+        mapping[row["locationID"]].append({
+            "landmarkName": row["landmarkName"],
+            "locationID": row["locationID"],
+            "landmarkDescription": row["landmarkDescription"],
+            "category": row["category"],
+        })
+    return mapping
+
+
+def fetch_location_currencies(connection, location_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT a.currencyName AS "currencyName",
+                   c.currencySymbol AS "currencySymbol"
+            FROM ACCEPTS a
+            JOIN CURRENCY c ON c.currencyName = a.currencyName
+            WHERE a.locationID = :lid
+            ORDER BY a.currencyName
+            """
+        ),
+        {"lid": location_id},
+    ).mappings().all()
+    return [{"currencyName": row["currencyName"], "currencySymbol": row["currencySymbol"]} for row in rows]
+
+
+def fetch_location_landmarks(connection, location_id: int):
+    rows = connection.execute(
+        text(
+            """
+            SELECT landmarkName AS "landmarkName",
+                   locationID AS "locationID",
+                   landmarkDescription AS "landmarkDescription",
+                   category AS "category"
+            FROM LANDMARK
+            WHERE locationID = :lid
+            ORDER BY landmarkName
+            """
+        ),
+        {"lid": location_id},
+    ).mappings().all()
+    return [
+        {
+            "landmarkName": row["landmarkName"],
+            "locationID": row["locationID"],
+            "landmarkDescription": row["landmarkDescription"],
+            "category": row["category"],
+        }
+        for row in rows
+    ]
+
+
+def load_user_vehicle(connection, user_id: int, vehicle_id: Optional[int]):
+    if vehicle_id is None:
+        return None
+
+    return connection.execute(
+        text(
+            """
+            SELECT vehicleID AS "vehicleID",
+                   transportID AS "transportID",
+                   vehicleName AS "vehicleName"
+            FROM VEHICLE
+            WHERE vehicleID = :vid AND ownedBy = :uid
+            """
+        ),
+        {"vid": vehicle_id, "uid": user_id},
+    ).mappings().fetchone()
 
 """
 Fetch all locations created by a specific user (through their user_id)
@@ -584,6 +804,8 @@ def fetch_locations(connection, user_id: int):
         {"uid": user_id},
     ).mappings().all()
 
+    currency_map = build_currency_map(connection, user_id)
+    landmark_map = build_landmark_map(connection, user_id)
     locations = []
     #add info to the locations list
     for row in rows:
@@ -597,6 +819,8 @@ def fetch_locations(connection, user_id: int):
             "maxCapacity": int(row["maxCapacity"] or 0),
             "parkingSpaces": int(row["parkingSpaces"] or 0),
             "createdBy": row["createdBy"],
+            "acceptedCurrencies": currency_map.get(row["locationID"], []),
+            "landmarks": landmark_map.get(row["locationID"], []),
         })
 
     return locations #return list
@@ -664,18 +888,23 @@ def fetch_saved_routes(connection, user_id: int):
         text(
             """
             SELECT
-                routeID          AS "routeID",
-                storedBy         AS "storedBy",
-                modeOfTransportID AS "modeOfTransportID",
-                startCellCoord   AS "startCellCoord",
-                endCellCoord     AS "endCellCoord",
-                travelTime       AS "travelTime",
-                totalDistance    AS "totalDistance",
-                totalCost        AS "totalCost",
-                directions       AS "directions"
-            FROM TRAVEL_ROUTE
-            WHERE storedBy = :uid
-            ORDER BY routeID DESC
+                tr.routeID          AS "routeID",
+                tr.storedBy         AS "storedBy",
+                tr.modeOfTransportID AS "modeOfTransportID",
+                tr.vehicleID        AS "vehicleID",
+                tr.startCellCoord   AS "startCellCoord",
+                tr.endCellCoord     AS "endCellCoord",
+                tr.travelTime       AS "travelTime",
+                tr.totalDistance    AS "totalDistance",
+                tr.totalCost        AS "totalCost",
+                tr.directions       AS "directions",
+                v.vehicleName       AS "vehicleName",
+                mot.transportType   AS "transportType"
+            FROM TRAVEL_ROUTE tr
+            LEFT JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+            LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
+            WHERE tr.storedBy = :uid
+            ORDER BY tr.routeID DESC
             """
         ),
         {"uid": user_id},
@@ -688,6 +917,9 @@ def fetch_saved_routes(connection, user_id: int):
             "routeID": row["routeID"],
             "storedBy": row["storedBy"],
             "modeOfTransportID": row["modeOfTransportID"],
+            "vehicleID": row["vehicleID"],
+            "vehicleName": row["vehicleName"],
+            "transportType": row["transportType"],
             "startCellCoord": point_to_pair(row["startCellCoord"]),
             "endCellCoord": point_to_pair(row["endCellCoord"]),
             "travelTime": row["travelTime"],
@@ -1060,6 +1292,513 @@ def updateLocation(user_id):
         print("Error updating location", exc)
         return jsonify({"message": "Unable to update location"}), 500
 
+
+@webApp.route("/reference/currencies", methods=["GET"])
+@require_auth()
+def get_currency_reference():
+    try:
+        with get_db_connection() as connection:
+            currency_rows = connection.execute(
+                text(
+                    """
+                    SELECT currencyName AS "currencyName",
+                           currencySymbol AS "currencySymbol"
+                    FROM CURRENCY
+                    ORDER BY currencyName
+                    """
+                )
+            ).mappings().all()
+            exchange_rows = connection.execute(
+                text(
+                    """
+                    SELECT currencyFrom AS "currencyFrom",
+                           currencyTo AS "currencyTo",
+                           exchangeRate AS "exchangeRate"
+                    FROM EXCHANGES_TO
+                    ORDER BY currencyFrom, currencyTo
+                    """
+                )
+            ).mappings().all()
+
+        currencies = [dict(row) for row in currency_rows]
+        exchange_rates = [dict(row) for row in exchange_rows]
+        return jsonify({"currencies": currencies, "exchangeRates": exchange_rates}), 200
+    except SQLAlchemyError as exc:
+        print("Error loading currencies", exc)
+        return jsonify({"message": "Unable to load currency reference"}), 500
+
+
+@webApp.route("/currencies", methods=["POST"])
+@require_auth()
+def create_currency():
+    payload = request.get_json() or {}
+    currency_name = (payload.get("currencyName") or "").strip()
+    currency_symbol = (payload.get("currencySymbol") or "").strip()
+    exchange_rates = payload.get("exchangeRates", [])
+
+    if not currency_name or not currency_symbol:
+        return jsonify({"message": "currencyName and currencySymbol are required"}), 400
+
+    if not isinstance(exchange_rates, list) or not exchange_rates:
+        return jsonify({"message": "At least one exchange rate is required"}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            if currency_exists(connection, currency_name):
+                return jsonify({"message": "Currency already exists"}), 409
+
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO CURRENCY (currencyName, currencySymbol)
+                    VALUES (:name, :symbol)
+                    """
+                ),
+                {"name": currency_name, "symbol": currency_symbol},
+            )
+
+            inserted_rates = []
+            processed_targets = set()
+            for rate_entry in exchange_rates:
+                target_name = (rate_entry.get("currencyTo") or "").strip()
+                raw_rate = rate_entry.get("rate")
+                if not target_name or raw_rate is None:
+                    raise ValueError("Each exchange rate requires currencyTo and rate")
+
+                if target_name == currency_name:
+                    raise ValueError("Exchange rate target must be different from the source currency")
+
+                if not currency_exists(connection, target_name):
+                    raise ValueError(f"Unknown target currency '{target_name}'")
+
+                if target_name in processed_targets:
+                    continue
+
+                try:
+                    rate_value = float(raw_rate)
+                except (TypeError, ValueError):
+                    raise ValueError("Exchange rates must be numeric")
+                if rate_value <= 0:
+                    raise ValueError("Exchange rates must be positive")
+
+                normalized = _format_exchange_rate(rate_value)
+                connection.execute(
+                    text("DELETE FROM EXCHANGES_TO WHERE currencyFrom = :source AND currencyTo = :target"),
+                    {"source": currency_name, "target": target_name},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO EXCHANGES_TO (currencyFrom, currencyTo, exchangeRate)
+                        VALUES (:source, :target, :rate)
+                        """
+                    ),
+                    {"source": currency_name, "target": target_name, "rate": normalized},
+                )
+
+                reciprocal = _format_exchange_rate(1 / rate_value)
+                connection.execute(
+                    text("DELETE FROM EXCHANGES_TO WHERE currencyFrom = :source AND currencyTo = :target"),
+                    {"source": target_name, "target": currency_name},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO EXCHANGES_TO (currencyFrom, currencyTo, exchangeRate)
+                        VALUES (:source, :target, :rate)
+                        """
+                    ),
+                    {"source": target_name, "target": currency_name, "rate": reciprocal},
+                )
+
+                inserted_rates.append({
+                    "currencyFrom": currency_name,
+                    "currencyTo": target_name,
+                    "exchangeRate": normalized,
+                })
+                processed_targets.add(target_name)
+
+        return jsonify({
+            "success": True,
+            "currency": {
+                "currencyName": currency_name,
+                "currencySymbol": currency_symbol,
+            },
+            "exchangeRates": inserted_rates,
+        }), 201
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except SQLAlchemyError as exc:
+        print("Error creating currency", exc)
+        return jsonify({"message": "Unable to create currency"}), 500
+
+
+@webApp.route("/reference/vehicles", methods=["GET"])
+@require_auth()
+def get_vehicle_reference():
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT vehicleName AS "vehicleName",
+                           passengerCapacity AS "passengerCapacity"
+                    FROM VEHICLE_INFO
+                    ORDER BY vehicleName
+                    """
+                )
+            ).mappings().all()
+
+        payload = []
+        for row in rows:
+            metadata = VEHICLE_REFERENCE_LOOKUP.get(row["vehicleName"], {})
+            payload.append({
+                "vehicleName": row["vehicleName"],
+                "passengerCapacity": int(row["passengerCapacity"] or 0),
+                "transportType": metadata.get("transportType", DEFAULT_TRANSPORT_TYPE),
+            })
+
+        return jsonify(payload), 200
+    except SQLAlchemyError as exc:
+        print("Error loading vehicle reference", exc)
+        return jsonify({"message": "Unable to load vehicles"}), 500
+
+
+@webApp.route("/<int:user_id>/vehicles", methods=["GET"])
+@require_auth(enforce_user_match=True)
+def list_user_vehicles(user_id):
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT v.vehicleID   AS "vehicleID",
+                           v.vehicleName AS "vehicleName",
+                           v.transportID AS "transportID",
+                           info.passengerCapacity AS "passengerCapacity",
+                           mot.transportType AS "transportType"
+                    FROM VEHICLE v
+                    JOIN VEHICLE_INFO info ON info.vehicleName = v.vehicleName
+                    LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = v.transportID
+                    WHERE v.ownedBy = :uid
+                    ORDER BY v.vehicleID
+                    """
+                ),
+                {"uid": user_id},
+            ).mappings().all()
+
+        payload = []
+        for row in rows:
+            payload.append({
+                "vehicleID": row["vehicleID"],
+                "vehicleName": row["vehicleName"],
+                "transportID": row["transportID"],
+                "transportType": row["transportType"] or DEFAULT_TRANSPORT_TYPE,
+                "passengerCapacity": int(row["passengerCapacity"] or 0),
+            })
+
+        return jsonify(payload), 200
+    except SQLAlchemyError as exc:
+        print("Error loading user vehicles", exc)
+        return jsonify({"message": "Unable to load vehicles"}), 500
+
+
+@webApp.route("/<int:user_id>/vehicles", methods=["POST"])
+@require_auth(enforce_user_match=True)
+def create_user_vehicle(user_id):
+    payload = request.get_json() or {}
+    vehicle_name = (payload.get("vehicleName") or "").strip()
+    requested_transport = payload.get("transportType")
+
+    if not vehicle_name:
+        return jsonify({"message": "vehicleName is required"}), 400
+
+    reference = VEHICLE_REFERENCE_LOOKUP.get(vehicle_name)
+
+    try:
+        with db_engine.begin() as connection:
+            info_row = connection.execute(
+                text(
+                    """
+                    SELECT passengerCapacity AS "passengerCapacity"
+                    FROM VEHICLE_INFO
+                    WHERE vehicleName = :name
+                    """
+                ),
+                {"name": vehicle_name},
+            ).mappings().fetchone()
+
+            if info_row is None:
+                return jsonify({"message": "Unknown vehicle template"}), 400
+
+            transport_type = requested_transport or (reference["transportType"] if reference else DEFAULT_TRANSPORT_TYPE)
+            transport_id = ensure_transport_mode_id(connection, transport_type)
+
+            vehicle_row = connection.execute(
+                text(
+                    """
+                    INSERT INTO VEHICLE (transportID, vehicleName, ownedBy)
+                    VALUES (:transportID, :vehicleName, :owner)
+                    RETURNING vehicleID AS "vehicleID"
+                    """
+                ),
+                {"transportID": transport_id, "vehicleName": vehicle_name, "owner": user_id},
+            ).mappings().fetchone()
+
+            payload_response = {
+                "vehicleID": vehicle_row["vehicleID"],
+                "vehicleName": vehicle_name,
+                "transportID": transport_id,
+                "transportType": transport_type,
+                "passengerCapacity": int(info_row["passengerCapacity"] or 0),
+            }
+
+        return jsonify({"success": True, "vehicle": payload_response}), 201
+    except SQLAlchemyError as exc:
+        print("Error creating vehicle", exc)
+        return jsonify({"message": "Unable to create vehicle"}), 500
+
+
+@webApp.route("/<int:user_id>/vehicles/<int:vehicle_id>", methods=["DELETE"])
+@require_auth(enforce_user_match=True)
+def delete_user_vehicle(user_id, vehicle_id):
+    try:
+        with db_engine.begin() as connection:
+            result = connection.execute(
+                text("DELETE FROM VEHICLE WHERE vehicleID = :vid AND ownedBy = :uid"),
+                {"vid": vehicle_id, "uid": user_id},
+            )
+
+        if result.rowcount == 0:
+            return jsonify({"message": "Vehicle not found"}), 404
+
+        return jsonify({"success": True}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting vehicle", exc)
+        return jsonify({"message": "Unable to delete vehicle"}), 500
+
+
+@webApp.route("/<int:user_id>/locations/<int:location_id>/currencies", methods=["PUT"])
+@require_auth(enforce_user_match=True)
+def update_location_currencies(user_id, location_id):
+    payload = request.get_json() or {}
+    currency_names = payload.get("currencyNames", [])
+
+    if not isinstance(currency_names, list):
+        return jsonify({"message": "currencyNames must be a list"}), 400
+
+    normalized = []
+    for entry in currency_names:
+        if isinstance(entry, str):
+            trimmed = entry.strip()
+            if trimmed:
+                normalized.append(trimmed)
+
+    # allow empty list to clear accepted currencies
+    normalized = list(dict.fromkeys(normalized))
+
+    try:
+        with db_engine.begin() as connection:
+            if not location_owned_by_user(connection, user_id, location_id):
+                return jsonify({"message": "Location not found"}), 404
+
+            missing = [name for name in normalized if not currency_exists(connection, name)]
+            if missing:
+                return jsonify({"message": f"Unknown currencies: {', '.join(missing)}"}), 400
+
+            connection.execute(
+                text("DELETE FROM ACCEPTS WHERE locationID = :lid"),
+                {"lid": location_id},
+            )
+
+            for name in normalized:
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO ACCEPTS (currencyName, locationID)
+                        VALUES (:currencyName, :locationID)
+                        ON CONFLICT (currencyName, locationID) DO NOTHING
+                        """
+                    ),
+                    {"currencyName": name, "locationID": location_id},
+                )
+
+            updated = fetch_location_currencies(connection, location_id)
+
+        return jsonify({"success": True, "currencies": updated}), 200
+    except SQLAlchemyError as exc:
+        print("Error updating location currencies", exc)
+        return jsonify({"message": "Unable to update location currencies"}), 500
+
+
+@webApp.route("/<int:user_id>/landmarks", methods=["GET"])
+@require_auth(enforce_user_match=True)
+def list_landmarks(user_id):
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT l.landmarkName AS "landmarkName",
+                           l.locationID AS "locationID",
+                           l.landmarkDescription AS "landmarkDescription",
+                           l.category AS "category"
+                    FROM LANDMARK l
+                    JOIN CELL cell ON cell.locationID = l.locationID
+                    WHERE cell.createdBy = :uid
+                    ORDER BY l.locationID, l.landmarkName
+                    """
+                ),
+                {"uid": user_id},
+            ).mappings().all()
+
+        return jsonify([dict(row) for row in rows]), 200
+    except SQLAlchemyError as exc:
+        print("Error loading landmarks", exc)
+        return jsonify({"message": "Unable to load landmarks"}), 500
+
+
+def _validate_landmark_payload(payload, require_category: bool = True):
+    location_id = payload.get("locationID")
+    landmark_name = (payload.get("landmarkName") or "").strip()
+    description = (payload.get("landmarkDescription") or "").strip()
+    category = payload.get("category")
+
+    if not location_id or not landmark_name:
+        raise ValueError("locationID and landmarkName are required")
+
+    if require_category and category not in LANDMARK_CATEGORIES:
+        raise ValueError("Invalid landmark category")
+
+    return location_id, landmark_name, description, category
+
+
+@webApp.route("/<int:user_id>/landmarks", methods=["POST"])
+@require_auth(enforce_user_match=True)
+def create_landmark(user_id):
+    payload = request.get_json() or {}
+    try:
+        location_id, landmark_name, description, category = _validate_landmark_payload(payload)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            if not location_owned_by_user(connection, user_id, location_id):
+                return jsonify({"message": "Location not found"}), 404
+
+            exists = connection.execute(
+                text(
+                    """
+                    SELECT 1 FROM LANDMARK
+                    WHERE landmarkName = :name AND locationID = :lid
+                    """
+                ),
+                {"name": landmark_name, "lid": location_id},
+            ).scalar_one_or_none()
+
+            if exists is not None:
+                return jsonify({"message": "Landmark already exists"}), 409
+
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO LANDMARK (landmarkName, locationID, landmarkDescription, category)
+                    VALUES (:name, :lid, :description, :category)
+                    """
+                ),
+                {
+                    "name": landmark_name,
+                    "lid": location_id,
+                    "description": description,
+                    "category": category,
+                },
+            )
+
+            updated = fetch_location_landmarks(connection, location_id)
+
+        return jsonify({"success": True, "landmarks": updated}), 201
+    except SQLAlchemyError as exc:
+        print("Error creating landmark", exc)
+        return jsonify({"message": "Unable to create landmark"}), 500
+
+
+@webApp.route("/<int:user_id>/landmarks", methods=["PUT"])
+@require_auth(enforce_user_match=True)
+def update_landmark(user_id):
+    payload = request.get_json() or {}
+    try:
+        location_id, landmark_name, description, category = _validate_landmark_payload(payload)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            if not location_owned_by_user(connection, user_id, location_id):
+                return jsonify({"message": "Location not found"}), 404
+
+            result = connection.execute(
+                text(
+                    """
+                    UPDATE LANDMARK
+                    SET landmarkDescription = :description,
+                        category = :category
+                    WHERE landmarkName = :name AND locationID = :lid
+                    """
+                ),
+                {
+                    "description": description,
+                    "category": category,
+                    "name": landmark_name,
+                    "lid": location_id,
+                },
+            )
+
+            if result.rowcount == 0:
+                return jsonify({"message": "Landmark not found"}), 404
+
+            updated = fetch_location_landmarks(connection, location_id)
+
+        return jsonify({"success": True, "landmarks": updated}), 200
+    except SQLAlchemyError as exc:
+        print("Error updating landmark", exc)
+        return jsonify({"message": "Unable to update landmark"}), 500
+
+
+@webApp.route("/<int:user_id>/landmarks", methods=["DELETE"])
+@require_auth(enforce_user_match=True)
+def delete_landmark(user_id):
+    payload = request.get_json() or {}
+    try:
+        location_id, landmark_name, _, _ = _validate_landmark_payload(payload, require_category=False)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    try:
+        with db_engine.begin() as connection:
+            if not location_owned_by_user(connection, user_id, location_id):
+                return jsonify({"message": "Location not found"}), 404
+
+            result = connection.execute(
+                text(
+                    """
+                    DELETE FROM LANDMARK
+                    WHERE landmarkName = :name AND locationID = :lid
+                    """
+                ),
+                {"name": landmark_name, "lid": location_id},
+            )
+
+            if result.rowcount == 0:
+                return jsonify({"message": "Landmark not found"}), 404
+
+            updated = fetch_location_landmarks(connection, location_id)
+
+        return jsonify({"success": True, "landmarks": updated}), 200
+    except SQLAlchemyError as exc:
+        print("Error deleting landmark", exc)
+        return jsonify({"message": "Unable to delete landmark"}), 500
+
 @webApp.route("/<int:user_id>/removeSavedPath", methods=["POST"])
 @require_auth(enforce_user_match=True)
 def removeSavedPath(user_id):
@@ -1121,15 +1860,24 @@ def saveRoute(user_id):
     if not start or not end:
         return jsonify({"message": "startCellCoord and endCellCoord are required"}), 400
 
+    vehicle_id = payload.get("vehicleID")
+    if vehicle_id is None:
+        return jsonify({"message": "vehicleID is required"}), 400
+
     try:
         with db_engine.begin() as connection:
-            transport_type = payload.get("transportType")
-            transport_id = payload.get("modeOfTransportID")
+            vehicle_row = load_user_vehicle(connection, user_id, vehicle_id)
+            if vehicle_row is None:
+                return jsonify({"message": "Vehicle not found"}), 404
 
-            if transport_type:
-                transport_id = ensure_transport_mode_id(connection, transport_type)
-            elif not transport_id_exists(connection, transport_id):
-                transport_id = ensure_transport_mode_id(connection, DEFAULT_TRANSPORT_TYPE)
+            transport_id = vehicle_row["transportID"]
+            if not transport_id or not transport_id_exists(connection, transport_id):
+                transport_type = payload.get("transportType")
+                transport_id = ensure_transport_mode_id(connection, transport_type or DEFAULT_TRANSPORT_TYPE)
+                connection.execute(
+                    text("UPDATE VEHICLE SET transportID = :tid WHERE vehicleID = :vid"),
+                    {"tid": transport_id, "vid": vehicle_row["vehicleID"]},
+                )
 
             existing_route_id = connection.execute(
                 text(
@@ -1138,6 +1886,7 @@ def saveRoute(user_id):
                     FROM TRAVEL_ROUTE
                     WHERE storedBy = :storedBy
                       AND modeOfTransportID = :mode
+                      AND vehicleID = :vehicleID
                       AND startCellCoord = point(:sx, :sy)
                       AND endCellCoord = point(:ex, :ey)
                       AND travelTime = :travelTime
@@ -1150,6 +1899,7 @@ def saveRoute(user_id):
                 {
                     "storedBy": user_id,
                     "mode": transport_id,
+                    "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
                     "sy": start[1],
                     "ex": end[0],
@@ -1172,10 +1922,10 @@ def saveRoute(user_id):
                 text(
                     """
                     INSERT INTO TRAVEL_ROUTE (
-                        storedBy, modeOfTransportID, startCellCoord, endCellCoord,
+                        storedBy, modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
                         travelTime, totalDistance, totalCost, directions
                     ) VALUES (
-                        :storedBy, :mode, point(:sx, :sy), point(:ex, :ey),
+                        :storedBy, :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
                         :travelTime, :totalDistance, :totalCost, :directions
                     )
                     RETURNING routeID
@@ -1184,6 +1934,7 @@ def saveRoute(user_id):
                 {
                     "storedBy": user_id,
                     "mode": transport_id,
+                    "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
                     "sy": start[1],
                     "ex": end[0],
