@@ -2,13 +2,13 @@
    File that is used to configure a database on Render
    Written to support PostgreSQL formatting (PostgreSQL is used on Render)
    
-   Author: Jason Duong
+   Author: Jason Duong, Yahya Asmara
 */
 
 --USER Table, now renamed USERS because of naming issues--
 CREATE TABLE USERS(
    userID SERIAL, --SERIAL = auto-incrementing starting from 1
-   email TEXT NOT NULL,
+   email TEXT UNIQUE NOT NULL,
    registrationDate TEXT NOT NULL,
    username TEXT UNIQUE NOT NULL, --Must be unique
    userPassword TEXT NOT NULL,
@@ -20,10 +20,10 @@ CREATE TABLE USERS(
 --LOCATION table, now renamed CELL because of naming issues--
 CREATE TABLE CELL(
    locationID SERIAL, 
-   coordinate POINT, --POINT = in the form of (x,y)
+   coordinate POINT UNIQUE, --POINT = in the form of (x,y)
    locationName TEXT NOT NULL,
-   locationType TEXT CHECK (locationType IN ('Hotel', 'Park', 'Cafe', 'Restaurant', 'Landmark', 'Gas_Station', 'Electric_Charging_Station')) NOT NULL, --ensure locationType is an element in the given list
-   isPublic BOOLEAN NOT NULL,
+   locationType TEXT NOT NULL,
+   FOREIGN KEY (locationType) REFERENCES CELL_TYPE_INFO(locationType)
    maxCapacity INTEGER CHECK (maxCapacity >= 0), --no negative capacities
    parkingSpaces INTEGER CHECK (parkingSpaces >= 0), --no negative parking spaces
    createdBy INTEGER, --Foreign key createdBy links to userID in user
@@ -31,6 +31,14 @@ CREATE TABLE CELL(
    FOREIGN KEY (createdBy) REFERENCES USERS(userID)
 );
 -------------------------------------------------------------
+
+--CELL_TYPE_INFO table--
+CREATE TABLE CELL_TYPE_INFO(
+   locationType TEXT CHECK (locationType IN ('Hotel', 'Park', 'Cafe', 'Restaurant', 'Gas_Station', 'Electric_Charging_Station')), --ensure locationType is an element in the given list
+   PRIMARY KEY (locationType)
+   isPublic BOOLEAN NOT NULL,
+);
+------------------------
 
 --LANDMARK table--
 CREATE TABLE LANDMARK(
@@ -46,11 +54,20 @@ CREATE TABLE LANDMARK(
 --MONEY table, now renamed CURRENCY because of naming issues--
 CREATE TABLE CURRENCY(
    currencyName TEXT,
-   exchangeRate TEXT NOT NULL,
    currencySymbbol TEXT NOT NULL,
    PRIMARY KEY (currencyName)
 );
 --------------------------------------------------------------
+
+--EXCHANGES_TO table (CURRENCY EXCHANGES_TO CURRENCY)--
+CREATE TABLE EXCHANGES_TO(
+   currencyFrom TEXT,
+   FOREIGN KEY (currencyFrom) REFERENCES CURRENCY(currencyName) ON DELETE CASCADE,
+   currencyTo TEXT,
+   FOREIGN KEY (currencyTo) REFERENCES CURRENCY(currencyName) ON DELETE CASCADE,
+   exchangeRate TEXT NOT NULL,
+);
+-------------------------------------------------------
 
 --ACCEPTS table (CELL ACCEPTS CURRENCY relationship)--
 CREATE TABLE ACCEPTS(
@@ -65,9 +82,9 @@ CREATE TABLE ACCEPTS(
 --ROAD table--
 CREATE TABLE ROAD(
    roadID SERIAL, 
-   roadSegment LSEG, --LSEG = a line segment defined as [(x1,y1),(x2,y2)] 
+   roadSegment LSEG UNIQUE, --LSEG = a line segment defined as [(x1,y1),(x2,y2)]
    PRIMARY KEY (roadID),
-   roadName TEXT,
+   roadName TEXT UNIQUE,
    distance INTEGER NOT NULL,
    roadType TEXT CHECK (roadType IN ('blocked', 'unblocked')) --ensure roadType is an element in the given list
 );
@@ -90,12 +107,12 @@ CREATE TABLE TIME_RESTRICTION(
    startTime TEXT,
    endTime TEXT,
    roadID INTEGER NOT NULL,
-   FOREIGN KEY (roadID) REFERENCES ROAD(roadID)
+   FOREIGN KEY (roadID) REFERENCES ROAD(roadID) ON DELETE CASCADE
 );
 
 CREATE TABLE RESTRICTEDTRANSPORT( --Multivalued attribute restrictedTransport for table time_restriction
    restrictionName TEXT,
-   FOREIGN KEY (restrictionName) REFERENCES TIME_RESTRICTION(restrictionName),
+   FOREIGN KEY (restrictionName) REFERENCES TIME_RESTRICTION(restrictionName) ON DELETE CASCADE,
    transportRestricted TEXT CHECK (transportRestricted IN ('Car', 'Bicycle', 'Bus', 'Walking')), --ensure transportRestricted is an element in the given list
    PRIMARY KEY (restrictionName, transportRestricted)
 );
@@ -115,9 +132,9 @@ CREATE TABLE MODE_OF_TRANSPORT(
 --ACCESSIBLE_BY table (ROAD ACCESSIBLE_BY MODE_OF_TRANSPORT)--
 CREATE TABLE ACCESSIBLE_BY(
    roadID INTEGER,
-   FOREIGN KEY (roadID) REFERENCES ROAD(roadID),
+   FOREIGN KEY (roadID) REFERENCES ROAD(roadID) ON DELETE CASCADE,
    transportID INTEGER,
-   FOREIGN KEY (transportID) REFERENCES MODE_OF_TRANSPORT(transportID),
+   FOREIGN KEY (transportID) REFERENCES MODE_OF_TRANSPORT(transportID) ON DELETE CASCADE,
    PRIMARY KEY (roadID, transportID)
 );
 --------------------------------------------------------------
@@ -126,27 +143,35 @@ CREATE TABLE ACCESSIBLE_BY(
 CREATE TABLE VEHICLE(
    vehicleID SERIAL, --SERIAL = auto-incrementing starting from 1
    transportID INTEGER,
-   FOREIGN KEY (transportID) REFERENCES MODE_OF_TRANSPORT(transportID), --Foreign key locationID links to locationID in cell
+   FOREIGN KEY (transportID) REFERENCES MODE_OF_TRANSPORT(transportID) ON DELETE CASCADE, --Foreign key locationID links to locationID in cell
    PRIMARY KEY (vehicleID, transportID), --Composite primary key
    vehicleName TEXT NOT NULL,
-   vehicleType TEXT CHECK (vehicleType IN ('Car', 'Bus')) NOT NULL, --ensure vehicleType is an element in the given list
-   passengerCapacity INTEGER CHECK (passengerCapacity >= 1) NOT NULL
+   FOREIGN KEY (vehicleName) REFERENCES VEHICLE_INFO(vehicleName) ON DELETE CASCADE,
+   ownedBy INTEGER,
+   FOREIGN KEY (ownedBy) REFERENCES USERS(userID) ON DELETE CASCADE
 );
 ------------------
+
+--VEHICLE_INFO table--
+CREATE TABLE VEHICLE_INFO(
+   vehicleName TEXT,
+   PRIMARY KEY (vehicleName),
+   passengerCapacity INTEGER CHECK (passengerCapacity >= 1) NOT NULL
+);
+----------------------
 
 --TRAVEL_ROUTE table--
 CREATE TABLE TRAVEL_ROUTE(
    routeID SERIAL, --SERIAL = auto-incrementing starting from 1
    PRIMARY KEY (routeID),
-   storedBy INTEGER NOT NULL,
-   FOREIGN KEY (storedBy) REFERENCES USERS(userID),
    modeOfTransportID INTEGER NOT NULL,
-   FOREIGN KEY (modeOfTransportID) REFERENCES MODE_OF_TRANSPORT(transportID),
+   FOREIGN KEY (modeOfTransportID) REFERENCES VEHICLE(transportID) ON DELETE CASCADE,
+   vehicleID INTEGER NOT NULL,
+   FOREIGN KEY (vehicleID) REFERENCES VEHICLE(vehicleID) ON DELETE CASCADE,
    startCellCoord POINT NOT NULL, --POINT = in the form of (x,y)
    endCellCoord POINT NOT NULL, --POINT = in the form of (x,y)
    travelTime TEXT NOT NULL,
    totalDistance TEXT NOT NULL,
-   totalCost TEXT NOT NULL,
-   directions TEXT[] --TEXT[] = list of strings
+   totalCost TEXT NOT NULL
 );
 ----------------------
