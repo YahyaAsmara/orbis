@@ -62,7 +62,7 @@ CREATE TABLE LANDMARK(
 --MONEY table, now renamed CURRENCY because of naming issues--
 CREATE TABLE CURRENCY(
    currencyName TEXT,
-   currencySymbbol TEXT NOT NULL,
+   currencySymbol TEXT NOT NULL,
    PRIMARY KEY (currencyName)
 );
 --------------------------------------------------------------
