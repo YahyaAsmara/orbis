@@ -1,6 +1,7 @@
 import type {
   User,
   Location,
+  LocationCurrency,
   Road,
   TravelRoute,
   SaveRouteRequest,
@@ -17,6 +18,16 @@ import type {
   AdminLocationRecord,
   AdminRouteRecord,
   AdminRoadRecord,
+  Vehicle,
+  VehicleReference,
+  CreateVehicleRequest,
+  CurrencyReference,
+  ExchangeRate,
+  CreateCurrencyRequest,
+  UpdateLocationCurrenciesRequest,
+  Landmark,
+  LandmarkPayload,
+  DeleteLandmarkRequest,
 } from '../types/models'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000'
@@ -152,6 +163,28 @@ export const authAPI = {
   },
 }
 
+// Reference data API
+export const referenceAPI = {
+  async getCurrencies(): Promise<{ currencies: CurrencyReference[]; exchangeRates: ExchangeRate[] }> {
+    return apiRequest('/reference/currencies', { method: 'GET' })
+  },
+
+  async createCurrency(payload: CreateCurrencyRequest): Promise<{
+    success: boolean
+    currency: CurrencyReference
+    exchangeRates: ExchangeRate[]
+  }> {
+    return apiRequest('/currencies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async getVehicleTemplates(): Promise<VehicleReference[]> {
+    return apiRequest('/reference/vehicles', { method: 'GET' })
+  },
+}
+
 // Location/Graph API
 export const locationAPI = {
   async getGraph(userId: number): Promise<GraphResponse> {
@@ -176,6 +209,63 @@ export const locationAPI = {
     return apiRequest(`/${userId}/removeLocation`, {
       method: 'DELETE',
       body: JSON.stringify({ locationID }),
+    })
+  },
+
+  async updateLocationCurrencies(
+    userId: number,
+    locationID: number,
+    payload: UpdateLocationCurrenciesRequest
+  ): Promise<{ success: boolean; currencies: LocationCurrency[] }> {
+    return apiRequest(`/${userId}/locations/${locationID}/currencies`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  },
+}
+
+// User vehicle API
+export const vehicleAPI = {
+  async list(userId: number): Promise<Vehicle[]> {
+    return apiRequest(`/${userId}/vehicles`, { method: 'GET' })
+  },
+
+  async create(userId: number, payload: CreateVehicleRequest): Promise<{ success: boolean; vehicle: Vehicle }> {
+    return apiRequest(`/${userId}/vehicles`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async remove(userId: number, vehicleId: number): Promise<{ success: boolean }> {
+    return apiRequest(`/${userId}/vehicles/${vehicleId}`, { method: 'DELETE' })
+  },
+}
+
+// Landmark API
+export const landmarkAPI = {
+  async list(userId: number): Promise<Landmark[]> {
+    return apiRequest(`/${userId}/landmarks`, { method: 'GET' })
+  },
+
+  async create(userId: number, payload: LandmarkPayload): Promise<{ success: boolean; landmarks: Landmark[] }> {
+    return apiRequest(`/${userId}/landmarks`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async update(userId: number, payload: LandmarkPayload): Promise<{ success: boolean; landmarks: Landmark[] }> {
+    return apiRequest(`/${userId}/landmarks`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async remove(userId: number, payload: DeleteLandmarkRequest): Promise<{ success: boolean; landmarks: Landmark[] }> {
+    return apiRequest(`/${userId}/landmarks`, {
+      method: 'DELETE',
+      body: JSON.stringify(payload),
     })
   },
 }
@@ -281,7 +371,10 @@ export const roadAPI = {
 
 export default {
   auth: authAPI,
+  reference: referenceAPI,
   location: locationAPI,
+  vehicle: vehicleAPI,
+  landmark: landmarkAPI,
   route: routeAPI,
   profile: profileAPI,
   admin: adminAPI,

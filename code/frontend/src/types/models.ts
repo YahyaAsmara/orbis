@@ -29,6 +29,11 @@ export const LOCATION_TYPE_ACCESS: Record<LocationType, boolean> = {
 
 export type TransportType = 'Car' | 'Bicycle' | 'Bus' | 'Walking'
 
+export interface LocationCurrency {
+  currencyName: string
+  currencySymbol: string
+}
+
 export interface Location {
   locationID: number
   coordinate: [number, number] // [x, y] point
@@ -38,6 +43,8 @@ export interface Location {
   maxCapacity: number
   parkingSpaces: number
   createdBy: number
+  acceptedCurrencies?: LocationCurrency[]
+  landmarks?: Landmark[]
 }
 
 export interface Landmark {
@@ -47,10 +54,26 @@ export interface Landmark {
   category: 'Mountain' | 'River' | 'Lake' | 'In_City' | 'Other'
 }
 
-export interface Currency {
+export interface CurrencyReference {
   currencyName: string
-  exchangeRate: string
   currencySymbol: string
+}
+
+export interface ExchangeRate {
+  currencyFrom: string
+  currencyTo: string
+  exchangeRate: string
+}
+
+export interface CurrencyExchangeInput {
+  currencyTo: string
+  rate: number
+}
+
+export interface CreateCurrencyRequest {
+  currencyName: string
+  currencySymbol: string
+  exchangeRates: CurrencyExchangeInput[]
 }
 
 export interface Road {
@@ -89,14 +112,28 @@ export interface Vehicle {
   vehicleID: number
   transportID: number
   vehicleName: string
-  vehicleType: 'Car' | 'Bus'
+  transportType: TransportType
   passengerCapacity: number
+}
+
+export interface VehicleReference {
+  vehicleName: string
+  passengerCapacity: number
+  transportType: TransportType
+}
+
+export interface CreateVehicleRequest {
+  vehicleName: string
+  transportType?: TransportType
 }
 
 export interface TravelRoute {
   routeID: number
   storedBy: number
   modeOfTransportID: number
+  vehicleID?: number
+  vehicleName?: string | null
+  transportType?: TransportType | null
   startCellCoord: [number, number]
   endCellCoord: [number, number]
   travelTime: string
@@ -108,12 +145,29 @@ export interface TravelRoute {
 export interface SaveRouteRequest {
   modeOfTransportID?: number
   transportType?: TransportType
+  vehicleID: number
   startCellCoord: [number, number]
   endCellCoord: [number, number]
   travelTime: string
   totalDistance: string
   totalCost: string
   directions: string[]
+}
+
+export interface UpdateLocationCurrenciesRequest {
+  currencyNames: string[]
+}
+
+export interface LandmarkPayload {
+  landmarkName: string
+  locationID: number
+  landmarkDescription: string
+  category: Landmark['category']
+}
+
+export interface DeleteLandmarkRequest {
+  landmarkName: string
+  locationID: number
 }
 
 // API request/response types

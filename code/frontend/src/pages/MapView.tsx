@@ -92,6 +92,7 @@ export default function MapView() {
   const [isSavingRoute, setIsSavingRoute] = useState(false)
   const [routeSaveFeedback, setRouteSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [pendingSelection, setPendingSelection] = useState<SelectedRoutePayload | null>(null)
+  const [selectedVehicleId] = useState<number | null>(null)
 
   const userId = authAPI.getCurrentUserId()
 
@@ -324,8 +325,14 @@ export default function MapView() {
     setIsSavingRoute(true)
     setRouteSaveFeedback(null)
     try {
+      if (!selectedVehicleId) {
+        setRouteSaveFeedback({ type: 'error', message: 'Select a vehicle before saving routes.' })
+        return
+      }
+
       const response = await routeAPI.saveRoute(userId, {
         transportType: routeSummary.mode,
+        vehicleID: selectedVehicleId,
         startCellCoord: start,
         endCellCoord: end,
         travelTime: routeSummary.totalTime.toFixed(2),
