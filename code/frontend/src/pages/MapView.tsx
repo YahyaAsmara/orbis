@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import type { FormEvent } from 'react'
 import { MapContainer, Marker, Popup, Polyline, useMapEvents } from 'react-leaflet'
 import * as L from 'leaflet'
-import { locationAPI, routeAPI, authAPI } from '../services/api'
+import { locationAPI, routeAPI, authAPI, referenceAPI, vehicleAPI, landmarkAPI } from '../services/api'
 import type {
   Location,
   LocationType,
@@ -12,6 +13,13 @@ import type {
   ComputePathResponse,
   ModeOfTransport,
   RouteSummary,
+  Vehicle,
+  VehicleReference,
+  CurrencyReference,
+  Landmark,
+  LandmarkPayload,
+  DeleteLandmarkRequest,
+  CreateVehicleRequest,
 } from '../types/models'
 import { LOCATION_TYPE_ACCESS } from '../types/models'
 import {
@@ -67,6 +75,8 @@ const generateRouteId = () => {
   return `route-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+const LANDMARK_CATEGORIES: Landmark['category'][] = ['Mountain', 'River', 'Lake', 'In_City', 'Other']
+
 // Fix for default marker icons in Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -92,9 +102,16 @@ export default function MapView() {
   const [isSavingRoute, setIsSavingRoute] = useState(false)
   const [routeSaveFeedback, setRouteSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [pendingSelection, setPendingSelection] = useState<SelectedRoutePayload | null>(null)
-  const [selectedVehicleId] = useState<number | null>(null)
+  const [vehicles, setVehicles] = useState<Vehicle[]>([])
+  const [vehicleTemplates, setVehicleTemplates] = useState<VehicleReference[]>([])
+  const [garageLoading, setGarageLoading] = useState(false)
+  const [garageError, setGarageError] = useState<string | null>(null)
+  const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null)
+  const [currencyOptions, setCurrencyOptions] = useState<CurrencyReference[]>([])
+  const [referenceError, setReferenceError] = useState<string | null>(null)
 
   const userId = authAPI.getCurrentUserId()
+  const activeVehicle = useMemo(() => vehicles.find((vehicle) => vehicle.vehicleID === selectedVehicleId) ?? null, [vehicles, selectedVehicleId])
 
   const updateRouteHistory = (updater: (prev: StoredRoute[]) => StoredRoute[]) => {
     setRouteHistory((prev) => {
@@ -189,12 +206,93 @@ export default function MapView() {
     Math.round(coord[1] / SNAP_SIZE) * SNAP_SIZE,
   ])
 
+  useEffect(() => {
+    const loadCurrencyCatalog = async () => {
+      try {
+        const response = await referenceAPI.getCurrencies()
+        setCurrencyOptions(response.currencies || [])
+        setReferenceError(null)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to load currency catalog.'
+        setReferenceError(message)
+      }
+    }
+
+    const loadVehicleTemplates = async () => {
+      try {
+        const templates = await referenceAPI.getVehicleTemplates()
+        setVehicleTemplates(templates)
+      } catch (err) {
+        console.warn('Unable to load vehicle templates', err)
+      }
+    }
+
+    loadCurrencyCatalog()
+    loadVehicleTemplates()
+  }, [])
+
   // Load user's graph
+  const loadUserVehicles = useCallback(async (uid: number) => {
+    setGarageLoading(true)
+    setGarageError(null)
+    try {
+      const result = await vehicleAPI.list(uid)
+      setVehicles(result)
+      setSelectedVehicleId((prev) => {
+        if (prev && result.some((vehicle) => vehicle.vehicleID === prev)) {
+          return prev
+        }
+        return result.length ? result[0].vehicleID : null
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load vehicles.'
+      setGarageError(message)
+      setVehicles([])
+      setSelectedVehicleId(null)
+    } finally {
+      setGarageLoading(false)
+    }
+  }, [])
+
+  const handleCreateVehicle = useCallback(async (payload: CreateVehicleRequest) => {
+    if (!userId) {
+      throw new Error('Sign in required to manage vehicles.')
+    }
+    try {
+      await vehicleAPI.create(userId, payload)
+      await loadUserVehicles(userId)
+      setGarageError(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create vehicle.'
+      setGarageError(message)
+      throw new Error(message)
+    }
+  }, [loadUserVehicles, userId])
+
+  const handleDeleteVehicle = useCallback(async (vehicleId: number) => {
+    if (!userId) {
+      throw new Error('Sign in required to manage vehicles.')
+    }
+    try {
+      await vehicleAPI.remove(userId, vehicleId)
+      await loadUserVehicles(userId)
+      setGarageError(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete vehicle.'
+      setGarageError(message)
+      throw new Error(message)
+    }
+  }, [loadUserVehicles, userId])
+
   useEffect(() => {
     if (userId) {
       loadGraph()
+      void loadUserVehicles(userId)
+    } else {
+      setVehicles([])
+      setSelectedVehicleId(null)
     }
-  }, [userId])
+  }, [userId, loadUserVehicles])
 
   useEffect(() => {
     if (!userId) {
@@ -250,6 +348,50 @@ export default function MapView() {
       setRoads(FALLBACK_GRAPH.roads)
       setGraphSource('fallback')
       setGraphError('Displaying Atlas fallback grid while live data is unavailable.')
+    }
+  }
+
+  const applyLocationPatch = (locationId: number, patch: Partial<Location>) => {
+    setLocations((prev) => prev.map((loc) => (loc.locationID === locationId ? { ...loc, ...patch } : loc)))
+    setSelectedLocation((prev) => (prev && prev.locationID === locationId ? { ...prev, ...patch } : prev))
+  }
+
+  const handleUpdateLocationCurrencies = async (locationId: number, currencyNames: string[]) => {
+    if (!userId) {
+      throw new Error('Sign in required to manage currencies.')
+    }
+    try {
+      const response = await locationAPI.updateLocationCurrencies(userId, locationId, { currencyNames })
+      applyLocationPatch(locationId, { acceptedCurrencies: response.currencies })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to update currencies.'
+      throw new Error(message)
+    }
+  }
+
+  const handleCreateLandmark = async (payload: LandmarkPayload) => {
+    if (!userId) {
+      throw new Error('Sign in required to manage landmarks.')
+    }
+    try {
+      const response = await landmarkAPI.create(userId, payload)
+      applyLocationPatch(payload.locationID, { landmarks: response.landmarks })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create landmark.'
+      throw new Error(message)
+    }
+  }
+
+  const handleDeleteLandmark = async (payload: DeleteLandmarkRequest) => {
+    if (!userId) {
+      throw new Error('Sign in required to manage landmarks.')
+    }
+    try {
+      const response = await landmarkAPI.remove(userId, payload)
+      applyLocationPatch(payload.locationID, { landmarks: response.landmarks })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to delete landmark.'
+      throw new Error(message)
     }
   }
 
@@ -322,14 +464,14 @@ export default function MapView() {
       return
     }
 
+    if (!selectedVehicleId) {
+      setRouteSaveFeedback({ type: 'error', message: 'Select a vehicle before saving routes.' })
+      return
+    }
+
     setIsSavingRoute(true)
     setRouteSaveFeedback(null)
     try {
-      if (!selectedVehicleId) {
-        setRouteSaveFeedback({ type: 'error', message: 'Select a vehicle before saving routes.' })
-        return
-      }
-
       const response = await routeAPI.saveRoute(userId, {
         transportType: routeSummary.mode,
         vehicleID: selectedVehicleId,
@@ -511,13 +653,29 @@ export default function MapView() {
               onPersistRoute={persistCurrentRoute}
               isSavingRoute={isSavingRoute}
               saveFeedback={routeSaveFeedback}
+              vehicles={vehicles}
+              vehicleTemplates={vehicleTemplates}
+              selectedVehicleId={selectedVehicleId}
+              onVehicleSelect={setSelectedVehicleId}
+              onCreateVehicle={handleCreateVehicle}
+              onDeleteVehicle={handleDeleteVehicle}
+              garageLoading={garageLoading}
+              garageError={garageError}
+              activeVehicleTransport={activeVehicle?.transportType}
+              activeVehicle={activeVehicle}
             />
           ) : selectedLocation ? (
             <LocationDetail
               location={selectedLocation}
+              currentUserId={userId}
               onRemove={() => handleRemoveLocation(selectedLocation)}
               onClose={() => setSelectedLocation(null)}
               onPlanRoute={() => setShowRoutePanel(true)}
+              currencyOptions={currencyOptions}
+              referenceError={referenceError}
+              onUpdateCurrencies={handleUpdateLocationCurrencies}
+              onCreateLandmark={handleCreateLandmark}
+              onDeleteLandmark={handleDeleteLandmark}
             />
           ) : (
             <LocationsList
@@ -697,27 +855,120 @@ function AddLocationForm({
 // Location detail panel
 function LocationDetail({
   location,
+  currentUserId,
   onRemove,
   onClose,
   onPlanRoute,
+  currencyOptions,
+  referenceError,
+  onUpdateCurrencies,
+  onCreateLandmark,
+  onDeleteLandmark,
 }: {
   location: Location
+  currentUserId: number | null
   onRemove: () => void
   onClose: () => void
   onPlanRoute: () => void
+  currencyOptions: CurrencyReference[]
+  referenceError: string | null
+  onUpdateCurrencies: (locationId: number, currencyNames: string[]) => Promise<void>
+  onCreateLandmark: (payload: LandmarkPayload) => Promise<void>
+  onDeleteLandmark: (payload: DeleteLandmarkRequest) => Promise<void>
 }) {
+  const [currencySelection, setCurrencySelection] = useState<string[]>(() => (location.acceptedCurrencies || []).map((currency) => currency.currencyName))
+  const [currencyBusy, setCurrencyBusy] = useState(false)
+  const [currencyStatus, setCurrencyStatus] = useState<string | null>(null)
+  const [landmarkStatus, setLandmarkStatus] = useState<string | null>(null)
+  const [landmarkBusy, setLandmarkBusy] = useState(false)
+  const [landmarkForm, setLandmarkForm] = useState<Omit<LandmarkPayload, 'locationID'>>({
+    landmarkName: '',
+    landmarkDescription: '',
+    category: LANDMARK_CATEGORIES[0],
+  })
+  const isOwner = currentUserId !== null && currentUserId === location.createdBy
+  const acceptedCurrencies = location.acceptedCurrencies || []
+  const landmarks = location.landmarks || []
+
+  useEffect(() => {
+    setCurrencySelection(acceptedCurrencies.map((currency) => currency.currencyName))
+    setLandmarkForm({ landmarkName: '', landmarkDescription: '', category: LANDMARK_CATEGORIES[0] })
+    setCurrencyStatus(null)
+    setLandmarkStatus(null)
+  }, [location.locationID])
+
+  const toggleCurrency = (name: string) => {
+    setCurrencySelection((prev) => (prev.includes(name) ? prev.filter((entry) => entry !== name) : [...prev, name]))
+  }
+
+  const handleCurrenciesSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!isOwner) return
+    setCurrencyBusy(true)
+    setCurrencyStatus(null)
+    try {
+      await onUpdateCurrencies(location.locationID, currencySelection)
+      setCurrencyStatus('Accepted currencies updated.')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update currencies.'
+      setCurrencyStatus(message)
+    } finally {
+      setCurrencyBusy(false)
+    }
+  }
+
+  const handleLandmarkSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!isOwner) return
+    if (!landmarkForm.landmarkName.trim()) {
+      setLandmarkStatus('Landmark name is required.')
+      return
+    }
+    setLandmarkBusy(true)
+    setLandmarkStatus(null)
+    try {
+      await onCreateLandmark({ ...landmarkForm, locationID: location.locationID })
+      setLandmarkStatus('Landmark saved.')
+      setLandmarkForm({ landmarkName: '', landmarkDescription: '', category: LANDMARK_CATEGORIES[0] })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save landmark.'
+      setLandmarkStatus(message)
+    } finally {
+      setLandmarkBusy(false)
+    }
+  }
+
+  const handleLandmarkDelete = async (landmarkName: string) => {
+    if (!isOwner) return
+    if (!confirm(`Remove ${landmarkName}?`)) return
+    setLandmarkBusy(true)
+    setLandmarkStatus(null)
+    try {
+      await onDeleteLandmark({ locationID: location.locationID, landmarkName })
+      setLandmarkStatus('Landmark removed.')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to remove landmark.'
+      setLandmarkStatus(message)
+    } finally {
+      setLandmarkBusy(false)
+    }
+  }
+
   return (
-    <div className="card p-6">
-      <div className="flex justify-between items-start mb-6">
-        <h3 className="text-mono text-sm uppercase tracking-wider font-bold">
-          Location Details
-        </h3>
+    <div className="card p-6 space-y-6">
+      <div className="flex justify-between items-start">
+        <div>
+          <h3 className="text-mono text-sm uppercase tracking-wider font-bold">Location Details</h3>
+          {!isOwner && (
+            <p className="text-mono text-2xs text-contour mt-1">Read-only preview · created by another mapper.</p>
+          )}
+        </div>
         <button onClick={onClose} className="text-contour hover:text-topo-brown">
           ✕
         </button>
       </div>
 
-      <div className="space-y-4 text-mono text-sm">
+      <div className="grid grid-cols-2 gap-4 text-mono text-sm">
         <div>
           <span className="text-contour text-xs uppercase block mb-1">Name</span>
           <strong>{location.locationName}</strong>
@@ -728,7 +979,11 @@ function LocationDetail({
         </div>
         <div>
           <span className="text-contour text-xs uppercase block mb-1">Coordinates</span>
-          [{location.coordinate[0].toFixed(4)}, {location.coordinate[1].toFixed(4)}]
+          [{location.coordinate[0].toFixed(2)}, {location.coordinate[1].toFixed(2)}]
+        </div>
+        <div>
+          <span className="text-contour text-xs uppercase block mb-1">Access</span>
+          {location.isPublic ? 'Public' : 'Private'}
         </div>
         <div>
           <span className="text-contour text-xs uppercase block mb-1">Capacity</span>
@@ -738,19 +993,143 @@ function LocationDetail({
           <span className="text-contour text-xs uppercase block mb-1">Parking</span>
           {location.parkingSpaces} spaces
         </div>
-        <div>
-          <span className="text-contour text-xs uppercase block mb-1">Access</span>
-          {location.isPublic ? 'Public' : 'Private'}
-        </div>
       </div>
 
-      <div className="flex flex-col gap-3 mt-6">
+      <section className="border-2 border-topo-brown p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-mono text-2xs uppercase text-contour">Accepted currencies</p>
+          {!isOwner && <span className="text-mono text-2xs text-contour">View only</span>}
+        </div>
+        {referenceError && (
+          <p className="text-mono text-2xs text-warn">{referenceError}</p>
+        )}
+        {currencyOptions.length ? (
+          <form onSubmit={handleCurrenciesSubmit} className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-mono text-xs">
+              {currencyOptions.map((currency) => (
+                <label key={currency.currencyName} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={currencySelection.includes(currency.currencyName)}
+                    onChange={() => toggleCurrency(currency.currencyName)}
+                    disabled={!isOwner || currencyBusy}
+                  />
+                  {currency.currencyName} ({currency.currencySymbol})
+                </label>
+              ))}
+            </div>
+            {isOwner && (
+              <div className="flex gap-2">
+                <button type="submit" className="btn btn-primary text-2xs" disabled={currencyBusy}>
+                  {currencyBusy ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary text-2xs"
+                  onClick={() => setCurrencySelection(acceptedCurrencies.map((currency) => currency.currencyName))}
+                  disabled={currencyBusy}
+                >
+                  Reset
+                </button>
+              </div>
+            )}
+            {currencyStatus && <p className="text-mono text-2xs text-topo-brown">{currencyStatus}</p>}
+          </form>
+        ) : (
+          <p className="text-mono text-xs text-contour">No currencies configured.</p>
+        )}
+        {acceptedCurrencies.length > 0 && (
+          <div className="text-mono text-2xs text-contour">
+            Active: {acceptedCurrencies.map((currency) => currency.currencyName).join(', ')}
+          </div>
+        )}
+      </section>
+
+      <section className="border-2 border-topo-brown p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-mono text-2xs uppercase text-contour">Landmarks</p>
+          {!isOwner && <span className="text-mono text-2xs text-contour">View only</span>}
+        </div>
+        {landmarks.length ? (
+          <ul className="space-y-2">
+            {landmarks.map((landmark) => (
+              <li key={landmark.landmarkName} className="border border-topo-brown p-3 text-mono text-xs flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold">{landmark.landmarkName}</p>
+                  <p className="text-contour text-2xs mb-1">{landmark.category.replace(/_/g, ' ')}</p>
+                  <p>{landmark.landmarkDescription || 'No description provided.'}</p>
+                </div>
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="text-topo-brown underline"
+                    onClick={() => void handleLandmarkDelete(landmark.landmarkName)}
+                    disabled={landmarkBusy}
+                  >
+                    Remove
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-mono text-xs text-contour">No landmarks recorded.</p>
+        )}
+
+        {isOwner && (
+          <form onSubmit={handleLandmarkSubmit} className="space-y-3">
+            <div>
+              <label className="text-mono text-2xs uppercase text-contour block mb-1">Name</label>
+              <input
+                className="input"
+                value={landmarkForm.landmarkName}
+                onChange={(e) => setLandmarkForm((prev) => ({ ...prev, landmarkName: e.target.value }))}
+                disabled={landmarkBusy}
+              />
+            </div>
+            <div>
+              <label className="text-mono text-2xs uppercase text-contour block mb-1">Category</label>
+              <select
+                className="input"
+                value={landmarkForm.category}
+                onChange={(e) => setLandmarkForm((prev) => ({ ...prev, category: e.target.value as Landmark['category'] }))}
+                disabled={landmarkBusy}
+              >
+                {LANDMARK_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {category.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-mono text-2xs uppercase text-contour block mb-1">Description</label>
+              <textarea
+                className="input"
+                rows={3}
+                value={landmarkForm.landmarkDescription}
+                onChange={(e) => setLandmarkForm((prev) => ({ ...prev, landmarkDescription: e.target.value }))}
+                disabled={landmarkBusy}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary text-2xs" disabled={landmarkBusy}>
+              {landmarkBusy ? 'Saving...' : 'Add landmark'}
+            </button>
+            {landmarkStatus && <p className="text-mono text-2xs text-topo-brown">{landmarkStatus}</p>}
+          </form>
+        )}
+      </section>
+
+      <div className="flex flex-col gap-3">
         <button onClick={onPlanRoute} className="btn btn-primary text-xs w-full">
           Plan Route from Here
         </button>
-        <button onClick={onRemove} className="btn btn-accent text-xs w-full">
+        <button onClick={onRemove} className="btn btn-accent text-xs w-full" disabled={!isOwner}>
           Remove Location
         </button>
+        {!isOwner && (
+          <p className="text-mono text-2xs text-contour text-center">Only the creator can delete this location.</p>
+        )}
       </div>
     </div>
   )
@@ -868,6 +1247,16 @@ function RoutePlanningPanel({
   onPersistRoute,
   isSavingRoute,
   saveFeedback,
+  vehicles,
+  vehicleTemplates,
+  selectedVehicleId,
+  onVehicleSelect,
+  onCreateVehicle,
+  onDeleteVehicle,
+  garageLoading,
+  garageError,
+  activeVehicleTransport,
+  activeVehicle,
 }: {
   locations: Location[]
   userId: number | null
@@ -882,11 +1271,29 @@ function RoutePlanningPanel({
   onPersistRoute: () => void | Promise<void>
   isSavingRoute: boolean
   saveFeedback: { type: 'success' | 'error'; message: string } | null
+  vehicles: Vehicle[]
+  vehicleTemplates: VehicleReference[]
+  selectedVehicleId: number | null
+  onVehicleSelect: (vehicleId: number | null) => void
+  onCreateVehicle: (payload: CreateVehicleRequest) => Promise<void> | void
+  onDeleteVehicle: (vehicleId: number) => Promise<void> | void
+  garageLoading: boolean
+  garageError: string | null
+  activeVehicleTransport?: ModeOfTransport['transportType']
+  activeVehicle: Vehicle | null
 }) {
   const [startCoord, setStartCoord] = useState<[number, number] | null>(null)
   const [endCoord, setEndCoord] = useState<[number, number] | null>(null)
   const [transportType, setTransportType] = useState<ModeOfTransport['transportType']>('Car')
   const [loading, setLoading] = useState(false)
+  const [garageOpen, setGarageOpen] = useState(false)
+
+  useEffect(() => {
+    if (activeVehicleTransport && activeVehicleTransport !== transportType) {
+      setTransportType(activeVehicleTransport)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- we only need to react to vehicle changes
+  }, [activeVehicleTransport])
 
   const computeChebyshevDistance = (a: [number, number], b: [number, number]) =>
     Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]))
@@ -984,6 +1391,52 @@ function RoutePlanningPanel({
           </select>
         </div>
 
+        <div>
+          <label className="block text-mono text-xs uppercase mb-2">Vehicle</label>
+          {vehicles.length > 0 ? (
+            <select
+              value={selectedVehicleId ?? ''}
+              onChange={(e) => onVehicleSelect(e.target.value ? parseInt(e.target.value, 10) : null)}
+              className="input"
+            >
+              {vehicles.map((vehicle) => (
+                <option key={vehicle.vehicleID} value={vehicle.vehicleID}>
+                  {vehicle.vehicleName} · {vehicle.transportType}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-mono text-xs text-contour">
+              No vehicles yet. Add one below to unlock route saving.
+            </p>
+          )}
+          <div className="mt-2 flex items-center justify-between">
+            {activeVehicle && (
+              <span className="text-mono text-2xs text-contour">
+                Seats {activeVehicle.passengerCapacity} · {activeVehicle.transportType}
+              </span>
+            )}
+            <button
+              type="button"
+              className="text-mono text-2xs text-topo-brown underline"
+              onClick={() => setGarageOpen((prev) => !prev)}
+            >
+              {garageOpen ? 'Hide garage' : 'Manage garage'}
+            </button>
+          </div>
+        </div>
+
+        {garageOpen && (
+          <VehicleGarageManager
+            templates={vehicleTemplates}
+            vehicles={vehicles}
+            onCreateVehicle={onCreateVehicle}
+            onDeleteVehicle={onDeleteVehicle}
+            loading={garageLoading}
+            error={garageError}
+          />
+        )}
+
         <button
           onClick={handleComputePath}
           disabled={!startCoord || !endCoord || loading}
@@ -1035,7 +1488,7 @@ function RoutePlanningPanel({
                 type="button"
                 onClick={() => { void onPersistRoute() }}
                 className="btn btn-primary text-xs"
-                disabled={isSavingRoute}
+                disabled={isSavingRoute || !selectedVehicleId}
               >
                 {isSavingRoute ? 'Saving route...' : 'Save route to profile'}
               </button>
@@ -1047,6 +1500,11 @@ function RoutePlanningPanel({
                 Save route to overlay
               </button>
             </div>
+            {!selectedVehicleId && (
+              <p className="text-mono text-2xs text-warn">
+                Select or add a vehicle to store routes.
+              </p>
+            )}
             {saveFeedback && (
               <p className={`text-mono text-xs ${saveFeedback.type === 'success' ? 'text-topo-green' : 'text-warn'}`}>
                 {saveFeedback.message}
@@ -1071,6 +1529,122 @@ function RoutePlanningPanel({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+function VehicleGarageManager({
+  templates,
+  vehicles,
+  onCreateVehicle,
+  onDeleteVehicle,
+  loading,
+  error,
+}: {
+  templates: VehicleReference[]
+  vehicles: Vehicle[]
+  onCreateVehicle: (payload: CreateVehicleRequest) => Promise<void> | void
+  onDeleteVehicle: (vehicleId: number) => Promise<void> | void
+  loading: boolean
+  error: string | null
+}) {
+  const [templateName, setTemplateName] = useState('')
+  const [pending, setPending] = useState(false)
+
+  useEffect(() => {
+    if (!templateName && templates.length) {
+      setTemplateName(templates[0].vehicleName)
+    }
+  }, [templateName, templates])
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!templateName) return
+    const template = templates.find((tpl) => tpl.vehicleName === templateName)
+    if (!template) return
+    setPending(true)
+    try {
+      await onCreateVehicle({ vehicleName: template.vehicleName, transportType: template.transportType })
+    } catch (err) {
+      // parent displays error state
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const handleDelete = async (vehicleId: number) => {
+    if (!vehicles.find((vehicle) => vehicle.vehicleID === vehicleId)) {
+      return
+    }
+    if (!confirm('Remove this vehicle from your garage?')) {
+      return
+    }
+    setPending(true)
+    try {
+      await onDeleteVehicle(vehicleId)
+    } catch (err) {
+      // parent displays error state
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <div className="border-2 border-topo-brown p-4 space-y-4 bg-topo-cream/50">
+      <div>
+        <p className="text-mono text-2xs uppercase text-contour mb-2">Add vehicle</p>
+        {templates.length ? (
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <select
+              className="input flex-1"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              disabled={pending || loading}
+            >
+              {templates.map((template) => (
+                <option key={template.vehicleName} value={template.vehicleName}>
+                  {template.vehicleName} · {template.transportType}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-primary text-2xs" type="submit" disabled={pending || loading}>
+              Add
+            </button>
+          </form>
+        ) : (
+          <p className="text-mono text-xs text-contour">No templates available.</p>
+        )}
+      </div>
+
+      <div>
+        <p className="text-mono text-2xs uppercase text-contour mb-2">Your garage ({vehicles.length})</p>
+        {vehicles.length ? (
+          <ul className="space-y-2 max-h-48 overflow-y-auto">
+            {vehicles.map((vehicle) => (
+              <li key={vehicle.vehicleID} className="flex items-center justify-between border border-topo-brown px-3 py-2 text-mono text-xs">
+                <div>
+                  <p className="font-bold">{vehicle.vehicleName}</p>
+                  <p className="text-contour">{vehicle.transportType} · Seats {vehicle.passengerCapacity}</p>
+                </div>
+                <button
+                  type="button"
+                  className="text-topo-brown underline"
+                  onClick={() => void handleDelete(vehicle.vehicleID)}
+                  disabled={pending || loading}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-mono text-xs text-contour">No vehicles owned yet.</p>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-mono text-2xs text-warn">{error}</p>
       )}
     </div>
   )
