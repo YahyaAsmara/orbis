@@ -371,6 +371,7 @@ function EditLocationModal({
                 value={form.maxCapacity}
                 min={0}
                 onChange={(e) => onChange('maxCapacity', parseInt(e.target.value, 10) || 0)}
+                onFocus={(e) => e.target.select()}
               />
             </div>
             <div>
@@ -381,6 +382,7 @@ function EditLocationModal({
                 value={form.parkingSpaces}
                 min={0}
                 onChange={(e) => onChange('parkingSpaces', parseInt(e.target.value, 10) || 0)}
+                onFocus={(e) => e.target.select()}
               />
             </div>
           </div>
@@ -393,12 +395,14 @@ function EditLocationModal({
                 className="input"
                 value={form.coordinate[0]}
                 onChange={(e) => onCoordinateChange(0, parseFloat(e.target.value) || 0)}
+                onFocus={(e) => e.target.select()}
               />
               <input
                 type="number"
                 className="input"
                 value={form.coordinate[1]}
                 onChange={(e) => onCoordinateChange(1, parseFloat(e.target.value) || 0)}
+                onFocus={(e) => e.target.select()}
               />
             </div>
           </div>

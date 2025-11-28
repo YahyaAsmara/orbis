@@ -816,6 +816,7 @@ function AddLocationForm({
             type="number"
             value={formData.maxCapacity}
             onChange={(e) => setFormData({ ...formData, maxCapacity: parseInt(e.target.value, 10) || 0 })}
+            onFocus={(e) => e.target.select()}
             className="input"
             min="0"
           />
@@ -827,6 +828,7 @@ function AddLocationForm({
             type="number"
             value={formData.parkingSpaces}
             onChange={(e) => setFormData({ ...formData, parkingSpaces: parseInt(e.target.value, 10) || 0 })}
+            onFocus={(e) => e.target.select()}
             className="input"
             min="0"
           />

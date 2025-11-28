@@ -1903,8 +1903,10 @@ def saveRoute(user_id):
                     WHERE v.ownedBy = :owner
                       AND tr.modeOfTransportID = :mode
                       AND tr.vehicleID = :vehicleID
-                      AND tr.startCellCoord = point(:sx, :sy)
-                      AND tr.endCellCoord = point(:ex, :ey)
+                                            AND tr.startCellCoord[0] = :sx
+                                            AND tr.startCellCoord[1] = :sy
+                                            AND tr.endCellCoord[0] = :ex
+                                            AND tr.endCellCoord[1] = :ey
                       AND tr.travelTime = :travelTime
                       AND tr.totalDistance = :totalDistance
                                             AND tr.totalCost = :totalCost
