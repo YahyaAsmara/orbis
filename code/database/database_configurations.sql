@@ -36,7 +36,7 @@ ON CONFLICT (locationType) DO UPDATE SET isPublic = EXCLUDED.isPublic;
 --LOCATION table, now renamed CELL because of naming issues--
 CREATE TABLE CELL(
    locationID SERIAL,
-   coordinate POINT UNIQUE, --POINT = in the form of (x,y)
+   coordinate POINT, --POINT = in the form of (x,y), INTENDED AS CANDIDATE KEY
    locationName TEXT NOT NULL,
    locationType TEXT NOT NULL,
    maxCapacity INTEGER CHECK (maxCapacity >= 0), --no negative capacities
@@ -73,7 +73,7 @@ CREATE TABLE EXCHANGES_TO(
    FOREIGN KEY (currencyFrom) REFERENCES CURRENCY(currencyName) ON DELETE CASCADE,
    currencyTo TEXT,
    FOREIGN KEY (currencyTo) REFERENCES CURRENCY(currencyName) ON DELETE CASCADE,
-   exchangeRate TEXT NOT NULL,
+   exchangeRate TEXT NOT NULL
 );
 -------------------------------------------------------
 
@@ -90,7 +90,7 @@ CREATE TABLE ACCEPTS(
 --ROAD table--
 CREATE TABLE ROAD(
    roadID SERIAL, 
-   roadSegment LSEG UNIQUE, --LSEG = a line segment defined as [(x1,y1),(x2,y2)]
+   roadSegment LSEG, --LSEG = a line segment defined as [(x1,y1),(x2,y2)], INTENDED AS CANDIDATE KEY
    PRIMARY KEY (roadID),
    roadName TEXT UNIQUE,
    distance INTEGER NOT NULL,
@@ -147,6 +147,14 @@ CREATE TABLE ACCESSIBLE_BY(
 );
 --------------------------------------------------------------
 
+--VEHICLE_INFO table--
+CREATE TABLE VEHICLE_INFO(
+   vehicleName TEXT,
+   PRIMARY KEY (vehicleName),
+   passengerCapacity INTEGER CHECK (passengerCapacity >= 1) NOT NULL
+);
+----------------------
+
 --VEHICLE table--
 CREATE TABLE VEHICLE(
    vehicleID SERIAL, --SERIAL = auto-incrementing starting from 1
@@ -160,22 +168,13 @@ CREATE TABLE VEHICLE(
 );
 ------------------
 
---VEHICLE_INFO table--
-CREATE TABLE VEHICLE_INFO(
-   vehicleName TEXT,
-   PRIMARY KEY (vehicleName),
-   passengerCapacity INTEGER CHECK (passengerCapacity >= 1) NOT NULL
-);
-----------------------
-
 --TRAVEL_ROUTE table--
 CREATE TABLE TRAVEL_ROUTE(
    routeID SERIAL, --SERIAL = auto-incrementing starting from 1
    PRIMARY KEY (routeID),
    modeOfTransportID INTEGER NOT NULL,
-   FOREIGN KEY (modeOfTransportID) REFERENCES VEHICLE(transportID) ON DELETE CASCADE,
+   FOREIGN KEY (modeOfTransportID, vehicleID) REFERENCES VEHICLE(transportID, vehicleID) ON DELETE CASCADE,
    vehicleID INTEGER NOT NULL,
-   FOREIGN KEY (vehicleID) REFERENCES VEHICLE(vehicleID) ON DELETE CASCADE,
    startCellCoord POINT NOT NULL, --POINT = in the form of (x,y)
    endCellCoord POINT NOT NULL, --POINT = in the form of (x,y)
    travelTime TEXT NOT NULL,
