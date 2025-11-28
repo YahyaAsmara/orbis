@@ -1,7 +1,28 @@
 import { useEffect, useMemo, useState, Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { adminAPI, authAPI } from '../services/api'
-import type { AdminOverview, AdminUserRecord, AdminLocationRecord, AdminRouteRecord, AdminRoadRecord } from '../types/models'
+import { adminAPI, authAPI, referenceAPI } from '../services/api'
+import type {
+  AdminOverview,
+  AdminUserRecord,
+  AdminLocationRecord,
+  AdminRouteRecord,
+  AdminRoadRecord,
+  CurrencyReference,
+  ExchangeRate,
+  VehicleReference,
+} from '../types/models'
+
+type CurrencyFormState = {
+  currencyName: string
+  currencySymbol: string
+  exchangeRates: { currencyTo: string; rate: string }[]
+}
+
+const createEmptyCurrencyForm = (): CurrencyFormState => ({
+  currencyName: '',
+  currencySymbol: '',
+  exchangeRates: [{ currencyTo: '', rate: '' }],
+})
 
 export default function AdminDashboard() {
   const navigate = useNavigate()
@@ -19,6 +40,12 @@ export default function AdminDashboard() {
   const [locationBusy, setLocationBusy] = useState<Record<number, boolean>>({})
   const [routeBusy, setRouteBusy] = useState<Record<number, boolean>>({})
   const [roadBusy, setRoadBusy] = useState<Record<number, boolean>>({})
+  const [currencies, setCurrencies] = useState<CurrencyReference[]>([])
+  const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([])
+  const [vehicleTemplates, setVehicleTemplates] = useState<VehicleReference[]>([])
+  const [currencyForm, setCurrencyForm] = useState<CurrencyFormState>(createEmptyCurrencyForm())
+  const [currencyBusy, setCurrencyBusy] = useState(false)
+  const [referenceLoading, setReferenceLoading] = useState(false)
   const currentUserId = authAPI.getCurrentUserId()
 
   useEffect(() => {
@@ -29,27 +56,119 @@ export default function AdminDashboard() {
     refreshAll()
   }, [])
 
+  const loadAdminData = async () => {
+    const [overviewData, usersData, locationsData, routesData, roadsData] = await Promise.all([
+      adminAPI.getOverview(),
+      adminAPI.getUsers(),
+      adminAPI.getLocations(),
+      adminAPI.getRoutes(),
+      adminAPI.getRoads(),
+    ])
+    setOverview(overviewData)
+    setUsers(usersData)
+    setLocations(locationsData)
+    setRoutes(routesData)
+    setRoads(roadsData)
+  }
+
+  const loadReferenceData = async () => {
+    setReferenceLoading(true)
+    try {
+      const [currencyPayload, vehicleData] = await Promise.all([
+        referenceAPI.getCurrencies(),
+        referenceAPI.getVehicleTemplates(),
+      ])
+      setCurrencies(currencyPayload.currencies)
+      setExchangeRates(currencyPayload.exchangeRates)
+      setVehicleTemplates(vehicleData)
+    } finally {
+      setReferenceLoading(false)
+    }
+  }
+
   const refreshAll = async () => {
     setIsRefreshing(true)
     setError(null)
     try {
-      const [overviewData, usersData, locationsData, routesData, roadsData] = await Promise.all([
-        adminAPI.getOverview(),
-        adminAPI.getUsers(),
-        adminAPI.getLocations(),
-        adminAPI.getRoutes(),
-        adminAPI.getRoads(),
-      ])
-      setOverview(overviewData)
-      setUsers(usersData)
-      setLocations(locationsData)
-      setRoutes(routesData)
-      setRoads(roadsData)
+      await Promise.all([loadAdminData(), loadReferenceData()])
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to load admin data'
       setError(message)
     } finally {
       setIsRefreshing(false)
+    }
+  }
+
+  const handleCurrencyFieldChange = (field: 'currencyName' | 'currencySymbol', value: string) => {
+    setCurrencyForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const handleExchangeRateChange = (index: number, field: 'currencyTo' | 'rate', value: string) => {
+    setCurrencyForm((prev) => {
+      const nextRates = prev.exchangeRates.map((entry, idx) =>
+        idx === index ? { ...entry, [field]: value } : entry
+      )
+      return { ...prev, exchangeRates: nextRates }
+    })
+  }
+
+  const handleAddExchangeRate = () => {
+    setCurrencyForm((prev) => ({
+      ...prev,
+      exchangeRates: [...prev.exchangeRates, { currencyTo: '', rate: '' }],
+    }))
+  }
+
+  const handleRemoveExchangeRate = (index: number) => {
+    setCurrencyForm((prev) => ({
+      ...prev,
+      exchangeRates: prev.exchangeRates.filter((_, idx) => idx !== index),
+    }))
+  }
+
+  const handleCreateCurrency = async () => {
+    const trimmedName = currencyForm.currencyName.trim()
+    const trimmedSymbol = currencyForm.currencySymbol.trim()
+    const normalizedRates = currencyForm.exchangeRates
+      .map((entry) => ({
+        currencyTo: entry.currencyTo.trim(),
+        rate: Number(entry.rate),
+      }))
+      .filter((entry) => entry.currencyTo && Number.isFinite(entry.rate) && entry.rate > 0)
+
+    if (!trimmedName || !trimmedSymbol) {
+      setError('Currency name and symbol are required')
+      return
+    }
+    if (normalizedRates.length === 0) {
+      setError('Provide at least one valid exchange rate')
+      return
+    }
+
+    setCurrencyBusy(true)
+    setError(null)
+    try {
+      await referenceAPI.createCurrency({
+        currencyName: trimmedName,
+        currencySymbol: trimmedSymbol,
+        exchangeRates: normalizedRates,
+      })
+      await loadReferenceData()
+      setCurrencyForm(createEmptyCurrencyForm())
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to create currency'
+      setError(message)
+    } finally {
+      setCurrencyBusy(false)
+    }
+  }
+
+  const handleRefreshReference = async () => {
+    try {
+      await loadReferenceData()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to refresh reference data'
+      setError(message)
     }
   }
 
@@ -246,6 +365,26 @@ export default function AdminDashboard() {
         roads={roads}
         onDelete={handleDeleteRoadRecord}
         busyMap={roadBusy}
+      />
+
+      <ReferenceControlPanel
+        loading={
+          (referenceLoading || isRefreshing) &&
+          currencies.length === 0 &&
+          vehicleTemplates.length === 0
+        }
+        referenceLoading={referenceLoading}
+        currencies={currencies}
+        exchangeRates={exchangeRates}
+        vehicleTemplates={vehicleTemplates}
+        currencyForm={currencyForm}
+        onCurrencyFieldChange={handleCurrencyFieldChange}
+        onExchangeRateChange={handleExchangeRateChange}
+        onAddExchangeRate={handleAddExchangeRate}
+        onRemoveExchangeRate={handleRemoveExchangeRate}
+        onSubmitCurrency={handleCreateCurrency}
+        currencyBusy={currencyBusy}
+        onRefreshReference={handleRefreshReference}
       />
     </div>
   )
@@ -656,6 +795,207 @@ function RoadsPanel({
                 </div>
               )
             })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReferenceControlPanel({
+  loading,
+  referenceLoading,
+  currencies,
+  exchangeRates,
+  vehicleTemplates,
+  currencyForm,
+  onCurrencyFieldChange,
+  onExchangeRateChange,
+  onAddExchangeRate,
+  onRemoveExchangeRate,
+  onSubmitCurrency,
+  currencyBusy,
+  onRefreshReference,
+}: {
+  loading: boolean
+  referenceLoading: boolean
+  currencies: CurrencyReference[]
+  exchangeRates: ExchangeRate[]
+  vehicleTemplates: VehicleReference[]
+  currencyForm: CurrencyFormState
+  onCurrencyFieldChange: (field: 'currencyName' | 'currencySymbol', value: string) => void
+  onExchangeRateChange: (index: number, field: 'currencyTo' | 'rate', value: string) => void
+  onAddExchangeRate: () => void
+  onRemoveExchangeRate: (index: number) => void
+  onSubmitCurrency: () => void | Promise<void>
+  currencyBusy: boolean
+  onRefreshReference: () => void | Promise<void>
+}) {
+  const exchangeMap = useMemo(() => {
+    return exchangeRates.reduce<Record<string, ExchangeRate[]>>((acc, rate) => {
+      const list = acc[rate.currencyFrom] ?? []
+      list.push(rate)
+      acc[rate.currencyFrom] = list
+      return acc
+    }, {})
+  }, [exchangeRates])
+
+  return (
+    <div className="card p-6 space-y-6">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-mono text-2xs uppercase tracking-widest text-contour">Reference Authorities</p>
+          <h2 className="text-display text-3xl font-black text-topo-brown">Currencies & Fleet Templates</h2>
+          <p className="text-mono text-xs text-contour">Govern the canonical data used across every user map.</p>
+        </div>
+        <button
+          onClick={onRefreshReference}
+          className="btn btn-secondary text-xs"
+          disabled={referenceLoading}
+        >
+          {referenceLoading ? 'Syncing…' : 'Sync Reference'}
+        </button>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+        <div className="space-y-4">
+          <div className="border border-topo-brown bg-topo-cream/60 divide-y divide-topo-brown/30">
+            <div className="flex items-center justify-between px-4 py-3">
+              <div>
+                <p className="text-mono text-2xs uppercase tracking-widest text-contour">Currencies</p>
+                <p className="text-mono text-sm text-topo-brown">{currencies.length} defined</p>
+              </div>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              {loading ? (
+                <SkeletonRow />
+              ) : currencies.length === 0 ? (
+                <div className="p-4 text-mono text-sm text-contour">No currencies configured.</div>
+              ) : (
+                currencies.map((currency) => {
+                  const rows = exchangeMap[currency.currencyName] ?? []
+                  return (
+                    <div key={currency.currencyName} className="px-4 py-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-mono text-sm font-bold text-topo-brown">{currency.currencyName}</p>
+                          <p className="text-mono text-2xs text-contour">Symbol · {currency.currencySymbol}</p>
+                        </div>
+                        <span className="text-mono text-2xs uppercase tracking-widest">{rows.length} rates</span>
+                      </div>
+                      <div className="text-mono text-2xs text-contour flex flex-wrap gap-2">
+                        {rows.length === 0 ? (
+                          <span>No outbound exchange rates</span>
+                        ) : (
+                          rows.map((rate) => (
+                            <span
+                              key={`${rate.currencyFrom}-${rate.currencyTo}`}
+                              className="bg-topo-green/10 border border-topo-green text-topo-brown px-2 py-1"
+                            >
+                              1 {rate.currencyFrom} → {rate.exchangeRate} {rate.currencyTo}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="border border-dashed border-topo-brown bg-topo-cream/40 p-4 space-y-4">
+          <div>
+            <p className="text-mono text-2xs uppercase tracking-widest text-contour">Create currency</p>
+            <p className="text-mono text-sm text-topo-brown">Add new tender with mandatory exchange baselines.</p>
+          </div>
+          <div className="space-y-3">
+            <input
+              className="input text-sm"
+              placeholder="Currency name"
+              value={currencyForm.currencyName}
+              onChange={(e) => onCurrencyFieldChange('currencyName', e.target.value)}
+            />
+            <input
+              className="input text-sm"
+              placeholder="Symbol"
+              value={currencyForm.currencySymbol}
+              onChange={(e) => onCurrencyFieldChange('currencySymbol', e.target.value)}
+            />
+          </div>
+          <div className="space-y-3">
+            <p className="text-mono text-2xs uppercase tracking-widest text-contour">Exchange rates</p>
+            {currencyForm.exchangeRates.map((entry, idx) => (
+              <div key={idx} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <select
+                  className="input flex-1 text-sm"
+                  value={entry.currencyTo}
+                  onChange={(e) => onExchangeRateChange(idx, 'currencyTo', e.target.value)}
+                >
+                  <option value="">Select target currency</option>
+                  {currencies.map((currency) => (
+                    <option key={currency.currencyName} value={currency.currencyName}>
+                      {currency.currencyName}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="input w-full sm:w-32 text-sm"
+                  placeholder="Rate"
+                  value={entry.rate}
+                  onChange={(e) => onExchangeRateChange(idx, 'rate', e.target.value)}
+                />
+                {currencyForm.exchangeRates.length > 1 && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary text-2xs"
+                    onClick={() => onRemoveExchangeRate(idx)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="btn btn-secondary text-2xs" onClick={onAddExchangeRate}>
+              Add exchange rate
+            </button>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary w-full"
+            onClick={onSubmitCurrency}
+            disabled={currencyBusy}
+          >
+            {currencyBusy ? 'Creating…' : 'Create currency'}
+          </button>
+        </div>
+      </div>
+
+      <div className="border border-topo-brown">
+        <div className="grid grid-cols-[1.6fr_1fr_1fr] bg-topo-green text-topo-cream text-mono text-2xs uppercase tracking-widest">
+          <span className="px-3 py-2">Vehicle template</span>
+          <span className="px-3 py-2">Transport</span>
+          <span className="px-3 py-2">Capacity</span>
+        </div>
+        <div className="max-h-64 overflow-y-auto divide-y divide-topo-brown/30">
+          {loading ? (
+            <SkeletonRow />
+          ) : vehicleTemplates.length === 0 ? (
+            <div className="p-4 text-mono text-sm text-contour">No fleet templates loaded.</div>
+          ) : (
+            vehicleTemplates.map((vehicle) => (
+              <div key={vehicle.vehicleName} className="grid grid-cols-[1.6fr_1fr_1fr] text-mono text-sm items-center">
+                <span className="px-3 py-2 font-bold text-topo-brown truncate" title={vehicle.vehicleName}>
+                  {vehicle.vehicleName}
+                </span>
+                <span className="px-3 py-2 text-2xs uppercase">{vehicle.transportType}</span>
+                <span className="px-3 py-2 text-2xs">{vehicle.passengerCapacity}</span>
+              </div>
+            ))
           )}
         </div>
       </div>
