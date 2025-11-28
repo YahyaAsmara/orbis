@@ -889,7 +889,6 @@ def fetch_saved_routes(connection, user_id: int):
             """
             SELECT
                 tr.routeID          AS "routeID",
-                tr.storedBy         AS "storedBy",
                 tr.modeOfTransportID AS "modeOfTransportID",
                 tr.vehicleID        AS "vehicleID",
                 tr.startCellCoord   AS "startCellCoord",
@@ -899,11 +898,12 @@ def fetch_saved_routes(connection, user_id: int):
                 tr.totalCost        AS "totalCost",
                 tr.directions       AS "directions",
                 v.vehicleName       AS "vehicleName",
+                v.ownedBy           AS "ownerID",
                 mot.transportType   AS "transportType"
             FROM TRAVEL_ROUTE tr
-            LEFT JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+            JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
             LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
-            WHERE tr.storedBy = :uid
+            WHERE v.ownedBy = :uid
             ORDER BY tr.routeID DESC
             """
         ),
@@ -915,7 +915,7 @@ def fetch_saved_routes(connection, user_id: int):
         directions = row["directions"] if isinstance(row["directions"], list) else []
         routes.append({
             "routeID": row["routeID"],
-            "storedBy": row["storedBy"],
+            "storedBy": row["ownerID"],
             "modeOfTransportID": row["modeOfTransportID"],
             "vehicleID": row["vehicleID"],
             "vehicleName": row["vehicleName"],
@@ -1093,11 +1093,13 @@ def delete_location_entry(connection, location_row: Mapping[str, object]):
     deleted_routes = connection.execute(
         text(
             """
-            DELETE FROM TRAVEL_ROUTE
-            WHERE storedBy = :uid
+            DELETE FROM TRAVEL_ROUTE tr
+            USING VEHICLE v
+            WHERE tr.vehicleID = v.vehicleID
+              AND v.ownedBy = :uid
               AND (
-                                        (startCellCoord[0] = :x AND startCellCoord[1] = :y)
-                                 OR (endCellCoord[0] = :x AND endCellCoord[1] = :y)
+                                        (tr.startCellCoord[0] = :x AND tr.startCellCoord[1] = :y)
+                                 OR (tr.endCellCoord[0] = :x AND tr.endCellCoord[1] = :y)
               )
             """
         ),
@@ -1121,7 +1123,14 @@ This includes routes, locations, user account itself
 def delete_user_records(connection, user_id: int) -> bool:
     #remove all routes
     connection.execute(
-        text("DELETE FROM TRAVEL_ROUTE WHERE storedBy = :uid"),
+        text(
+            """
+            DELETE FROM TRAVEL_ROUTE tr
+            USING VEHICLE v
+            WHERE tr.vehicleID = v.vehicleID
+              AND v.ownedBy = :uid
+            """
+        ),
         {"uid": user_id},
     )
     #remove all locations created by that user
@@ -1810,7 +1819,15 @@ def removeSavedPath(user_id):
     try:
         with db_engine.begin() as connection:
             connection.execute(
-                text("DELETE FROM TRAVEL_ROUTE WHERE routeID = :rid AND storedBy = :uid"),
+                text(
+                    """
+                    DELETE FROM TRAVEL_ROUTE tr
+                    USING VEHICLE v
+                    WHERE tr.routeID = :rid
+                      AND tr.vehicleID = v.vehicleID
+                      AND v.ownedBy = :uid
+                    """
+                ),
                 {"rid": route_id, "uid": user_id},
             )
         return jsonify({"success": True}), 200
@@ -1882,22 +1899,23 @@ def saveRoute(user_id):
             existing_route_id = connection.execute(
                 text(
                     """
-                    SELECT routeID AS "routeID"
-                    FROM TRAVEL_ROUTE
-                    WHERE storedBy = :storedBy
-                      AND modeOfTransportID = :mode
-                      AND vehicleID = :vehicleID
-                      AND startCellCoord = point(:sx, :sy)
-                      AND endCellCoord = point(:ex, :ey)
-                      AND travelTime = :travelTime
-                      AND totalDistance = :totalDistance
-                      AND totalCost = :totalCost
-                      AND directions = :directions
+                    SELECT tr.routeID AS "routeID"
+                    FROM TRAVEL_ROUTE tr
+                    JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                    WHERE v.ownedBy = :owner
+                      AND tr.modeOfTransportID = :mode
+                      AND tr.vehicleID = :vehicleID
+                      AND tr.startCellCoord = point(:sx, :sy)
+                      AND tr.endCellCoord = point(:ex, :ey)
+                      AND tr.travelTime = :travelTime
+                      AND tr.totalDistance = :totalDistance
+                      AND tr.totalCost = :totalCost
+                      AND tr.directions = :directions
                     LIMIT 1
                     """
                 ),
                 {
-                    "storedBy": user_id,
+                    "owner": user_id,
                     "mode": transport_id,
                     "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
@@ -1922,17 +1940,16 @@ def saveRoute(user_id):
                 text(
                     """
                     INSERT INTO TRAVEL_ROUTE (
-                        storedBy, modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
+                        modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
                         travelTime, totalDistance, totalCost, directions
                     ) VALUES (
-                        :storedBy, :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
+                        :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
                         :travelTime, :totalDistance, :totalCost, :directions
                     )
                     RETURNING routeID
                     """
                 ),
                 {
-                    "storedBy": user_id,
                     "mode": transport_id,
                     "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
@@ -2100,9 +2117,10 @@ def get_admin_users():
                         GROUP BY createdBy
                     ),
                     route_counts AS (
-                        SELECT storedBy AS user_id, COUNT(*) AS total
-                        FROM TRAVEL_ROUTE
-                        GROUP BY storedBy
+                        SELECT v.ownedBy AS user_id, COUNT(*) AS total
+                        FROM TRAVEL_ROUTE tr
+                        JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                        GROUP BY v.ownedBy
                     )
                     SELECT
                         u.userID AS "userID",
@@ -2226,7 +2244,8 @@ def admin_all_routes():
                         mot.transportType AS "transportType",
                         COALESCE(u.username, 'Unknown') AS "owner"
                     FROM TRAVEL_ROUTE tr
-                    LEFT JOIN USERS u ON u.userID = tr.storedBy
+                    LEFT JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                    LEFT JOIN USERS u ON u.userID = v.ownedBy
                     LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
                     ORDER BY tr.routeID DESC
                     """
