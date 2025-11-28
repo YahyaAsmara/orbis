@@ -15,9 +15,17 @@ export type LocationType =
   | 'Park'
   | 'Cafe'
   | 'Restaurant'
-  | 'Landmark'
   | 'Gas_Station'
   | 'Electric_Charging_Station'
+
+export const LOCATION_TYPE_ACCESS: Record<LocationType, boolean> = {
+  Hotel: false,
+  Park: true,
+  Cafe: false,
+  Restaurant: false,
+  Gas_Station: false,
+  Electric_Charging_Station: false,
+}
 
 export type TransportType = 'Car' | 'Bicycle' | 'Bus' | 'Walking'
 
@@ -139,7 +147,6 @@ export interface AddLocationRequest {
   coordinate: [number, number]
   locationName: string
   locationType: LocationType
-  isPublic: boolean
   maxCapacity: number
   parkingSpaces: number
 }

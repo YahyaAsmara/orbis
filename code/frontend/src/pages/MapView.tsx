@@ -13,6 +13,7 @@ import type {
   ModeOfTransport,
   RouteSummary,
 } from '../types/models'
+import { LOCATION_TYPE_ACCESS } from '../types/models'
 import {
   loadStoredRoutes,
   persistStoredRoutes,
@@ -38,7 +39,6 @@ const LOCATION_ICON_META: Record<LocationType, { emoji: string; color: string }>
   Park: { emoji: '🌳', color: '#2f8f5b' },
   Cafe: { emoji: '☕', color: '#6b4c3b' },
   Restaurant: { emoji: '🍽️', color: '#b9413a' },
-  Landmark: { emoji: '🗿', color: '#555c73' },
   Gas_Station: { emoji: '⛽', color: '#a0522d' },
   Electric_Charging_Station: { emoji: '⚡', color: '#e1ba25' },
 }
@@ -120,8 +120,8 @@ export default function MapView() {
         locationID: 1,
         coordinate: [0, 0],
         locationName: 'Atlas Terminal',
-        locationType: 'Landmark',
-        isPublic: true,
+        locationType: 'Hotel',
+        isPublic: LOCATION_TYPE_ACCESS['Hotel'],
         maxCapacity: 5000,
         parkingSpaces: 1200,
         createdBy: 0,
@@ -131,7 +131,7 @@ export default function MapView() {
         coordinate: [8, 8],
         locationName: 'Meridian Gardens',
         locationType: 'Park',
-        isPublic: true,
+        isPublic: LOCATION_TYPE_ACCESS['Park'],
         maxCapacity: 1200,
         parkingSpaces: 80,
         createdBy: 0,
@@ -140,8 +140,8 @@ export default function MapView() {
         locationID: 3,
         coordinate: [-10, 14],
         locationName: 'Aurora Spire',
-        locationType: 'Landmark',
-        isPublic: false,
+        locationType: 'Restaurant',
+        isPublic: LOCATION_TYPE_ACCESS['Restaurant'],
         maxCapacity: 200,
         parkingSpaces: 15,
         createdBy: 0,
@@ -151,7 +151,7 @@ export default function MapView() {
         coordinate: [14, -6],
         locationName: 'Ion Station',
         locationType: 'Electric_Charging_Station',
-        isPublic: true,
+        isPublic: LOCATION_TYPE_ACCESS['Electric_Charging_Station'],
         maxCapacity: 50,
         parkingSpaces: 25,
         createdBy: 0,
@@ -569,7 +569,6 @@ function AddLocationForm({
     coordinate,
     locationName: '',
     locationType: 'Park',
-    isPublic: true,
     maxCapacity: 100,
     parkingSpaces: 0,
   })
@@ -577,6 +576,8 @@ function AddLocationForm({
   useEffect(() => {
     setFormData((prev) => ({ ...prev, coordinate }))
   }, [coordinate])
+
+  const accessLabel = LOCATION_TYPE_ACCESS[formData.locationType] ? 'Public' : 'Private'
 
   const updateCoordinate = (index: 0 | 1, value: number) => {
     setFormData((prev) => {
@@ -632,14 +633,13 @@ function AddLocationForm({
           <label className="block text-mono text-xs uppercase mb-2">Type</label>
           <select
             value={formData.locationType}
-            onChange={(e) => setFormData({ ...formData, locationType: e.target.value as any })}
+            onChange={(e) => setFormData({ ...formData, locationType: e.target.value as LocationType })}
             className="input"
           >
             <option>Hotel</option>
             <option>Park</option>
             <option>Cafe</option>
             <option>Restaurant</option>
-            <option>Landmark</option>
             <option>Gas_Station</option>
             <option>Electric_Charging_Station</option>
           </select>
@@ -650,7 +650,7 @@ function AddLocationForm({
           <input
             type="number"
             value={formData.maxCapacity}
-            onChange={(e) => setFormData({ ...formData, maxCapacity: parseInt(e.target.value) })}
+            onChange={(e) => setFormData({ ...formData, maxCapacity: parseInt(e.target.value, 10) || 0 })}
             className="input"
             min="0"
           />
@@ -661,20 +661,17 @@ function AddLocationForm({
           <input
             type="number"
             value={formData.parkingSpaces}
-            onChange={(e) => setFormData({ ...formData, parkingSpaces: parseInt(e.target.value) })}
+            onChange={(e) => setFormData({ ...formData, parkingSpaces: parseInt(e.target.value, 10) || 0 })}
             className="input"
             min="0"
           />
         </div>
 
-        <div className="flex items-center gap-3">
-          <input
-            type="checkbox"
-            checked={formData.isPublic}
-            onChange={(e) => setFormData({ ...formData, isPublic: e.target.checked })}
-            className="w-5 h-5"
-          />
-          <label className="text-mono text-xs uppercase">Public Location</label>
+        <div>
+          <p className="text-mono text-2xs uppercase text-contour mb-1">Access Level</p>
+          <p className="text-mono text-sm font-bold text-topo-brown">
+            {accessLabel} · determined by location type
+          </p>
         </div>
 
         <div className="flex gap-3 pt-2">

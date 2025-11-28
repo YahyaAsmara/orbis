@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { locationAPI, authAPI } from '../services/api'
 import type { Location } from '../types/models'
+import { LOCATION_TYPE_ACCESS } from '../types/models'
 
 type LocationEditForm = {
   locationName: string
@@ -9,7 +10,6 @@ type LocationEditForm = {
   coordinate: [number, number]
   maxCapacity: number
   parkingSpaces: number
-  isPublic: boolean
 }
 
 export default function Places() {
@@ -41,7 +41,6 @@ export default function Places() {
         coordinate: [...editingLocation.coordinate] as [number, number],
         maxCapacity: editingLocation.maxCapacity,
         parkingSpaces: editingLocation.parkingSpaces,
-        isPublic: editingLocation.isPublic,
       })
       setEditError(null)
     } else {
@@ -80,9 +79,9 @@ export default function Places() {
     setFilteredLocations(filtered)
   }
 
-  const locationTypes = ['All', 'Hotel', 'Park', 'Cafe', 'Restaurant', 'Landmark', 'Gas_Station', 'Electric_Charging_Station']
+  const locationTypes = ['All', 'Hotel', 'Park', 'Cafe', 'Restaurant', 'Gas_Station', 'Electric_Charging_Station']
 
-  const handleEditChange = (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number | boolean) => {
+  const handleEditChange = (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number) => {
     if (!editForm) return
     setEditForm((prev) => (prev ? { ...prev, [field]: value } : prev))
   }
@@ -107,11 +106,11 @@ export default function Places() {
         coordinate: editForm.coordinate,
         maxCapacity: editForm.maxCapacity,
         parkingSpaces: editForm.parkingSpaces,
-        isPublic: editForm.isPublic,
       })
+      const derivedAccess = LOCATION_TYPE_ACCESS[editForm.locationType]
       setLocations((prev) => prev.map((loc) => (
         loc.locationID === editingLocation.locationID
-          ? { ...loc, ...editForm }
+          ? { ...loc, ...editForm, isPublic: derivedAccess }
           : loc
       )))
       setEditingLocation(null)
@@ -302,13 +301,15 @@ function EditLocationModal({
 }: {
   location: Location
   form: LocationEditForm
-  onChange: (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number | boolean) => void
+  onChange: (field: keyof Omit<LocationEditForm, 'coordinate'>, value: string | number) => void
   onCoordinateChange: (index: 0 | 1, value: number) => void
   onClose: () => void
   onSave: () => Promise<void> | void
   saving: boolean
   error: string | null
 }) {
+  const derivedAccess = LOCATION_TYPE_ACCESS[form.locationType] ? 'Public' : 'Private'
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white w-full max-w-xl shadow-2xl border-4 border-topo-brown">
@@ -347,7 +348,6 @@ function EditLocationModal({
                 <option>Park</option>
                 <option>Cafe</option>
                 <option>Restaurant</option>
-                <option>Landmark</option>
                 <option>Gas_Station</option>
                 <option>Electric_Charging_Station</option>
               </select>
@@ -355,14 +355,10 @@ function EditLocationModal({
 
             <div>
               <label className="block text-mono text-xs uppercase mb-1">Access</label>
-              <select
-                className="input"
-                value={form.isPublic ? 'public' : 'private'}
-                onChange={(e) => onChange('isPublic', e.target.value === 'public')}
-              >
-                <option value="public">Public</option>
-                <option value="private">Private</option>
-              </select>
+              <div className="text-mono text-sm font-bold text-topo-brown border border-topo-brown px-3 py-2 bg-topo-cream/70">
+                {derivedAccess}
+              </div>
+              <p className="text-mono text-2xs text-contour mt-1">Access level is determined by location type.</p>
             </div>
           </div>
 

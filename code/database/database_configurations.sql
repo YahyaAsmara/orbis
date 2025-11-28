@@ -17,28 +17,36 @@ CREATE TABLE USERS(
 );
 -----------------------------------------------------------
 
+--CELL_TYPE_INFO table--
+CREATE TABLE CELL_TYPE_INFO(
+   locationType TEXT CHECK (locationType IN ('Hotel', 'Park', 'Cafe', 'Restaurant', 'Gas_Station', 'Electric_Charging_Station')) PRIMARY KEY,
+   isPublic BOOLEAN NOT NULL
+);
+------------------------
+
+INSERT INTO CELL_TYPE_INFO (locationType, isPublic) VALUES
+   ('Hotel', FALSE),
+   ('Park', TRUE),
+   ('Cafe', FALSE),
+   ('Restaurant', FALSE),
+   ('Gas_Station', FALSE),
+   ('Electric_Charging_Station', FALSE)
+ON CONFLICT (locationType) DO UPDATE SET isPublic = EXCLUDED.isPublic;
+
 --LOCATION table, now renamed CELL because of naming issues--
 CREATE TABLE CELL(
-   locationID SERIAL, 
+   locationID SERIAL,
    coordinate POINT UNIQUE, --POINT = in the form of (x,y)
    locationName TEXT NOT NULL,
    locationType TEXT NOT NULL,
-   FOREIGN KEY (locationType) REFERENCES CELL_TYPE_INFO(locationType)
    maxCapacity INTEGER CHECK (maxCapacity >= 0), --no negative capacities
    parkingSpaces INTEGER CHECK (parkingSpaces >= 0), --no negative parking spaces
    createdBy INTEGER, --Foreign key createdBy links to userID in user
    PRIMARY KEY (locationID),
+   FOREIGN KEY (locationType) REFERENCES CELL_TYPE_INFO(locationType),
    FOREIGN KEY (createdBy) REFERENCES USERS(userID)
 );
 -------------------------------------------------------------
-
---CELL_TYPE_INFO table--
-CREATE TABLE CELL_TYPE_INFO(
-   locationType TEXT CHECK (locationType IN ('Hotel', 'Park', 'Cafe', 'Restaurant', 'Gas_Station', 'Electric_Charging_Station')), --ensure locationType is an element in the given list
-   PRIMARY KEY (locationType)
-   isPublic BOOLEAN NOT NULL,
-);
-------------------------
 
 --LANDMARK table--
 CREATE TABLE LANDMARK(

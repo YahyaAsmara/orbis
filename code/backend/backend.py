@@ -101,6 +101,15 @@ TRANSPORT_MODE_DEFAULTS = {
     "Walking": {"speedMultiplier": 5, "isEcoFriendly": True, "energyEfficiency": 100},
 }
 
+LOCATION_TYPE_ACCESS = {
+    "Hotel": False,
+    "Park": True,
+    "Cafe": False,
+    "Restaurant": False,
+    "Gas_Station": False,
+    "Electric_Charging_Station": False,
+}
+
 """
 Create a Flask instance of the current file.
 __name__ denotes the current file, value varies by whether this file is imported or ran directly.
@@ -505,6 +514,26 @@ def transport_id_exists(connection, transport_id: Optional[int]) -> bool:
     ).fetchone()
     return row is not None
 
+
+def is_valid_location_type(location_type: Optional[str]) -> bool:
+    return bool(location_type) and location_type in LOCATION_TYPE_ACCESS
+
+
+def ensure_location_type_row(connection, location_type: str) -> None:
+    if not is_valid_location_type(location_type):
+        raise ValueError(f"Unknown location type: {location_type}")
+
+    connection.execute(
+        text(
+            """
+            INSERT INTO CELL_TYPE_INFO (locationType, isPublic)
+            VALUES (:lt, :public)
+            ON CONFLICT (locationType) DO UPDATE SET isPublic = EXCLUDED.isPublic
+            """
+        ),
+        {"lt": location_type, "public": LOCATION_TYPE_ACCESS[location_type]},
+    )
+
 """
 Preload all default transport modes into the database if missing
 """
@@ -513,14 +542,18 @@ def bootstrap_transport_modes():
         for transport_type in TRANSPORT_MODE_DEFAULTS:
             ensure_transport_mode_id(connection, transport_type)
 
-"""
-Initialize transport modes at startup
-Ignore failures but provide warning if needed
-"""
+
+def bootstrap_location_types():
+    with db_engine.begin() as connection:
+        for location_type in LOCATION_TYPE_ACCESS:
+            ensure_location_type_row(connection, location_type)
+
+
 try:
     bootstrap_transport_modes()
+    bootstrap_location_types()
 except SQLAlchemyError as exc:
-    print("Warning: unable to bootstrap transport modes", exc)
+    print("Warning: unable to bootstrap reference data", exc)
 
 
 #----Road related functions----
@@ -534,17 +567,18 @@ def fetch_locations(connection, user_id: int):
         text(
             """
             SELECT
-                locationID   AS "locationID",
-                coordinate   AS "coordinate",
-                locationName AS "locationName",
-                locationType AS "locationType",
-                isPublic     AS "isPublic",
-                maxCapacity  AS "maxCapacity",
-                parkingSpaces AS "parkingSpaces",
-                createdBy    AS "createdBy"
-            FROM CELL
-            WHERE createdBy = :uid
-            ORDER BY locationID
+                c.locationID   AS "locationID",
+                c.coordinate   AS "coordinate",
+                c.locationName AS "locationName",
+                c.locationType AS "locationType",
+                info.isPublic  AS "isPublic",
+                c.maxCapacity  AS "maxCapacity",
+                c.parkingSpaces AS "parkingSpaces",
+                c.createdBy    AS "createdBy"
+            FROM CELL c
+            JOIN CELL_TYPE_INFO info ON info.locationType = c.locationType
+            WHERE c.createdBy = :uid
+            ORDER BY c.locationID
             """
         ),
         {"uid": user_id},
@@ -896,14 +930,19 @@ def addLocation(user_id):
     if not coordinate or len(coordinate) != 2:
         return jsonify({"message": "coordinate is required"}), 400
 
+    location_type = payload.get("locationType")
+    if not is_valid_location_type(location_type):
+        return jsonify({"message": "Invalid locationType"}), 400
+
     try:
         with db_engine.begin() as connection:
+            ensure_location_type_row(connection, location_type)
             result = connection.execute(
                 text(
                     """
-                    INSERT INTO CELL (coordinate, locationName, locationType, isPublic,
+                    INSERT INTO CELL (coordinate, locationName, locationType,
                                       maxCapacity, parkingSpaces, createdBy)
-                    VALUES (point(:x, :y), :name, :type, :public, :capacity, :parking, :uid)
+                    VALUES (point(:x, :y), :name, :type, :capacity, :parking, :uid)
                     RETURNING locationID AS "locationID"
                     """
                 ),
@@ -911,8 +950,7 @@ def addLocation(user_id):
                     "x": coordinate[0],
                     "y": coordinate[1],
                     "name": payload.get("locationName"),
-                    "type": payload.get("locationType"),
-                    "public": bool(payload.get("isPublic")),
+                    "type": location_type,
                     "capacity": payload.get("maxCapacity", 0),
                     "parking": payload.get("parkingSpaces", 0),
                     "uid": user_id,
@@ -987,10 +1025,13 @@ def updateLocation(user_id):
     fields = {
         "locationName": payload.get("locationName"),
         "locationType": payload.get("locationType"),
-        "isPublic": payload.get("isPublic"),
         "maxCapacity": payload.get("maxCapacity"),
         "parkingSpaces": payload.get("parkingSpaces"),
     }
+    new_location_type = fields["locationType"]
+    if new_location_type is not None and not is_valid_location_type(new_location_type):
+        return jsonify({"message": "Invalid locationType"}), 400
+
     coordinate = payload.get("coordinate")
     assignments = []
     params = {"locationID": location_id, "uid": user_id}
@@ -1011,6 +1052,8 @@ def updateLocation(user_id):
 
     try:
         with db_engine.begin() as connection:
+            if new_location_type is not None:
+                ensure_location_type_row(connection, new_location_type)
             connection.execute(text(query), params)
         return jsonify({"success": True}), 200
     except SQLAlchemyError as exc:
@@ -1265,7 +1308,12 @@ def get_admin_overview():
                         (SELECT COUNT(*) FROM CELL) AS total_locations,
                         (SELECT COUNT(*) FROM TRAVEL_ROUTE) AS total_routes,
                         (SELECT COUNT(*) FROM ROAD WHERE roadType = 'blocked') AS blocked_roads,
-                        (SELECT COUNT(*) FROM CELL WHERE NOT isPublic) AS pending_requests
+                        (
+                            SELECT COUNT(*)
+                            FROM CELL c
+                            JOIN CELL_TYPE_INFO info ON info.locationType = c.locationType
+                            WHERE NOT info.isPublic
+                        ) AS pending_requests
                     """
                 )
             ).fetchone()
@@ -1378,11 +1426,12 @@ def admin_all_locations():
                         c.locationName AS "locationName",
                         c.locationType AS "locationType",
                         c.coordinate AS "coordinate",
-                        c.isPublic AS "isPublic",
+                        info.isPublic AS "isPublic",
                         c.maxCapacity AS "maxCapacity",
                         c.parkingSpaces AS "parkingSpaces",
                         COALESCE(u.username, 'Unknown') AS "owner"
                     FROM CELL c
+                    JOIN CELL_TYPE_INFO info ON info.locationType = c.locationType
                     LEFT JOIN USERS u ON u.userID = c.createdBy
                     ORDER BY c.locationID
                     """
