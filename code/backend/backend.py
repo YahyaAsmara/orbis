@@ -1877,7 +1877,10 @@ def saveRoute(user_id):
 
     vehicle_id = payload.get("vehicleID")
     if vehicle_id is None:
-        return jsonify({"message": "vehicleID is required"}), 400
+        return jsonify({
+            "message": "Routes must be saved with a vehicle. Select or create a vehicle before saving.",
+            "reason": "vehicle_missing",
+        }), 400
 
     try:
         with db_engine.begin() as connection:
