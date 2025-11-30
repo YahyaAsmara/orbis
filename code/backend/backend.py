@@ -2481,6 +2481,8 @@ def build_road_graph(connection_to_db, owner_id: Optional[int] = None):
     rows = db_output.fetchall()
 
     for roadID, roadSegment, roadName, distance, roadType in rows:
+        if roadType == "blocked":
+            continue  # skip blocked roads so pathfinding avoids closed segments
         if not roadSegment or len(roadSegment) != 2:  # roadSegment expected to be [(x1, y1), (x2, y2)]
             continue
 
