@@ -296,7 +296,7 @@ export default function AdminDashboard() {
             Administrative Control Center
           </p>
           <h1 className="text-display text-5xl font-black text-topo-brown">
-            Atlas Ops Console
+            Orbis Admin Console
           </h1>
           <p className="text-mono text-sm text-contour mt-2">
             Monitor user activity, infrastructure health, and network syncs.
@@ -845,7 +845,7 @@ function ReferenceControlPanel({
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-mono text-2xs uppercase tracking-widest text-contour">Reference Authorities</p>
-          <h2 className="text-display text-3xl font-black text-topo-brown">Currencies & Fleet Templates</h2>
+          <h2 className="text-display text-3xl font-black text-topo-brown">Currencies & Vehicle Templates</h2>
           <p className="text-mono text-xs text-contour">Govern the canonical data used across every user map.</p>
         </div>
         <button

@@ -828,7 +828,7 @@ def fetch_locations(connection, user_id: int):
 """
 Fetch all roads and their related information
 """
-def fetch_roads(connection):
+def fetch_roads(connection, owner_id: Optional[int] = None):
     #select rows with all information related to the road
     rows = connection.execute(
         text(
@@ -847,9 +847,11 @@ def fetch_roads(connection):
             LEFT JOIN CONNECTS_TO ct ON ct.roadID = r.roadID
             LEFT JOIN CELL c ON c.locationID = ct.locationID
             LEFT JOIN USERS u ON u.userID = c.createdBy
+            WHERE (:owner_id IS NULL OR c.createdBy = :owner_id)
             ORDER BY r.roadID
             """
-        )
+        ),
+        {"owner_id": owner_id},
     ).mappings().all()
 
     roads = {}
@@ -889,7 +891,6 @@ def fetch_saved_routes(connection, user_id: int):
             """
             SELECT
                 tr.routeID          AS "routeID",
-                tr.storedBy         AS "storedBy",
                 tr.modeOfTransportID AS "modeOfTransportID",
                 tr.vehicleID        AS "vehicleID",
                 tr.startCellCoord   AS "startCellCoord",
@@ -897,13 +898,13 @@ def fetch_saved_routes(connection, user_id: int):
                 tr.travelTime       AS "travelTime",
                 tr.totalDistance    AS "totalDistance",
                 tr.totalCost        AS "totalCost",
-                tr.directions       AS "directions",
                 v.vehicleName       AS "vehicleName",
+                v.ownedBy           AS "ownerID",
                 mot.transportType   AS "transportType"
             FROM TRAVEL_ROUTE tr
-            LEFT JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+            JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
             LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
-            WHERE tr.storedBy = :uid
+            WHERE v.ownedBy = :uid
             ORDER BY tr.routeID DESC
             """
         ),
@@ -912,10 +913,9 @@ def fetch_saved_routes(connection, user_id: int):
 
     routes = []
     for row in rows:
-        directions = row["directions"] if isinstance(row["directions"], list) else []
         routes.append({
             "routeID": row["routeID"],
-            "storedBy": row["storedBy"],
+            "storedBy": row["ownerID"],
             "modeOfTransportID": row["modeOfTransportID"],
             "vehicleID": row["vehicleID"],
             "vehicleName": row["vehicleName"],
@@ -925,7 +925,7 @@ def fetch_saved_routes(connection, user_id: int):
             "travelTime": row["travelTime"],
             "totalDistance": row["totalDistance"],
             "totalCost": row["totalCost"],
-            "directions": directions,
+            "directions": [],
         })
 
     return routes
@@ -1093,11 +1093,13 @@ def delete_location_entry(connection, location_row: Mapping[str, object]):
     deleted_routes = connection.execute(
         text(
             """
-            DELETE FROM TRAVEL_ROUTE
-            WHERE storedBy = :uid
+            DELETE FROM TRAVEL_ROUTE tr
+            USING VEHICLE v
+            WHERE tr.vehicleID = v.vehicleID
+              AND v.ownedBy = :uid
               AND (
-                                        (startCellCoord[0] = :x AND startCellCoord[1] = :y)
-                                 OR (endCellCoord[0] = :x AND endCellCoord[1] = :y)
+                                        (tr.startCellCoord[0] = :x AND tr.startCellCoord[1] = :y)
+                                 OR (tr.endCellCoord[0] = :x AND tr.endCellCoord[1] = :y)
               )
             """
         ),
@@ -1121,7 +1123,14 @@ This includes routes, locations, user account itself
 def delete_user_records(connection, user_id: int) -> bool:
     #remove all routes
     connection.execute(
-        text("DELETE FROM TRAVEL_ROUTE WHERE storedBy = :uid"),
+        text(
+            """
+            DELETE FROM TRAVEL_ROUTE tr
+            USING VEHICLE v
+            WHERE tr.vehicleID = v.vehicleID
+              AND v.ownedBy = :uid
+            """
+        ),
         {"uid": user_id},
     )
     #remove all locations created by that user
@@ -1142,7 +1151,7 @@ def getGraph(user_id):
     try:
         with get_db_connection() as connection:
             locations = fetch_locations(connection, user_id)
-            roads = fetch_roads(connection)
+            roads = fetch_roads(connection, user_id)
         return jsonify({"locations": locations, "roads": roads}), 200
     except (ValueError, SQLAlchemyError) as exc:
         print("Error loading graph", exc)
@@ -1810,7 +1819,15 @@ def removeSavedPath(user_id):
     try:
         with db_engine.begin() as connection:
             connection.execute(
-                text("DELETE FROM TRAVEL_ROUTE WHERE routeID = :rid AND storedBy = :uid"),
+                text(
+                    """
+                    DELETE FROM TRAVEL_ROUTE tr
+                    USING VEHICLE v
+                    WHERE tr.routeID = :rid
+                      AND tr.vehicleID = v.vehicleID
+                      AND v.ownedBy = :uid
+                    """
+                ),
                 {"rid": route_id, "uid": user_id},
             )
         return jsonify({"success": True}), 200
@@ -1831,7 +1848,7 @@ def computePath(user_id):
 
     try:
         with get_db_connection() as connection:
-            adjacency, _ = build_road_graph(connection)
+            adjacency, _ = build_road_graph(connection, user_id)
 
         path, total_distance = aStarSearch(user_id, start, end, pit_stops, adjacency)
         if path is None:
@@ -1862,7 +1879,10 @@ def saveRoute(user_id):
 
     vehicle_id = payload.get("vehicleID")
     if vehicle_id is None:
-        return jsonify({"message": "vehicleID is required"}), 400
+        return jsonify({
+            "message": "Routes must be saved with a vehicle. Select or create a vehicle before saving.",
+            "reason": "vehicle_missing",
+        }), 400
 
     try:
         with db_engine.begin() as connection:
@@ -1882,22 +1902,24 @@ def saveRoute(user_id):
             existing_route_id = connection.execute(
                 text(
                     """
-                    SELECT routeID AS "routeID"
-                    FROM TRAVEL_ROUTE
-                    WHERE storedBy = :storedBy
-                      AND modeOfTransportID = :mode
-                      AND vehicleID = :vehicleID
-                      AND startCellCoord = point(:sx, :sy)
-                      AND endCellCoord = point(:ex, :ey)
-                      AND travelTime = :travelTime
-                      AND totalDistance = :totalDistance
-                      AND totalCost = :totalCost
-                      AND directions = :directions
+                    SELECT tr.routeID AS "routeID"
+                    FROM TRAVEL_ROUTE tr
+                    JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                    WHERE v.ownedBy = :owner
+                      AND tr.modeOfTransportID = :mode
+                      AND tr.vehicleID = :vehicleID
+                                            AND tr.startCellCoord[0] = :sx
+                                            AND tr.startCellCoord[1] = :sy
+                                            AND tr.endCellCoord[0] = :ex
+                                            AND tr.endCellCoord[1] = :ey
+                      AND tr.travelTime = :travelTime
+                      AND tr.totalDistance = :totalDistance
+                                            AND tr.totalCost = :totalCost
                     LIMIT 1
                     """
                 ),
                 {
-                    "storedBy": user_id,
+                    "owner": user_id,
                     "mode": transport_id,
                     "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
@@ -1906,8 +1928,7 @@ def saveRoute(user_id):
                     "ey": end[1],
                     "travelTime": payload.get("travelTime", ""),
                     "totalDistance": payload.get("totalDistance", ""),
-                    "totalCost": payload.get("totalCost", ""),
-                    "directions": payload.get("directions", []),
+                                        "totalCost": payload.get("totalCost", ""),
                 },
             ).scalar_one_or_none()
 
@@ -1922,17 +1943,16 @@ def saveRoute(user_id):
                 text(
                     """
                     INSERT INTO TRAVEL_ROUTE (
-                        storedBy, modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
-                        travelTime, totalDistance, totalCost, directions
+                        modeOfTransportID, vehicleID, startCellCoord, endCellCoord,
+                        travelTime, totalDistance, totalCost
                     ) VALUES (
-                        :storedBy, :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
-                        :travelTime, :totalDistance, :totalCost, :directions
+                        :mode, :vehicleID, point(:sx, :sy), point(:ex, :ey),
+                        :travelTime, :totalDistance, :totalCost
                     )
                     RETURNING routeID
                     """
                 ),
                 {
-                    "storedBy": user_id,
                     "mode": transport_id,
                     "vehicleID": vehicle_row["vehicleID"],
                     "sx": start[0],
@@ -1942,7 +1962,6 @@ def saveRoute(user_id):
                     "travelTime": payload.get("travelTime", ""),
                     "totalDistance": payload.get("totalDistance", ""),
                     "totalCost": payload.get("totalCost", ""),
-                    "directions": payload.get("directions", []),
                 },
             ).scalar_one()
 
@@ -2013,7 +2032,7 @@ def getProfileData(user_id):
 
             locations = fetch_locations(connection, user_id)
             routes = fetch_saved_routes(connection, user_id)
-            roads = fetch_roads(connection)
+            roads = fetch_roads(connection, user_id)
 
         user_payload = {
             "userID": user_row["userID"],
@@ -2100,9 +2119,10 @@ def get_admin_users():
                         GROUP BY createdBy
                     ),
                     route_counts AS (
-                        SELECT storedBy AS user_id, COUNT(*) AS total
-                        FROM TRAVEL_ROUTE
-                        GROUP BY storedBy
+                        SELECT v.ownedBy AS user_id, COUNT(*) AS total
+                        FROM TRAVEL_ROUTE tr
+                        JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                        GROUP BY v.ownedBy
                     )
                     SELECT
                         u.userID AS "userID",
@@ -2226,7 +2246,8 @@ def admin_all_routes():
                         mot.transportType AS "transportType",
                         COALESCE(u.username, 'Unknown') AS "owner"
                     FROM TRAVEL_ROUTE tr
-                    LEFT JOIN USERS u ON u.userID = tr.storedBy
+                    LEFT JOIN VEHICLE v ON v.vehicleID = tr.vehicleID
+                    LEFT JOIN USERS u ON u.userID = v.ownedBy
                     LEFT JOIN MODE_OF_TRANSPORT mot ON mot.transportID = tr.modeOfTransportID
                     ORDER BY tr.routeID DESC
                     """
@@ -2434,13 +2455,29 @@ def normalize_coord(coord):
 """
 Function to build the road 
 """
-def build_road_graph(connection_to_db):
+def build_road_graph(connection_to_db, owner_id: Optional[int] = None):
     adjacency = defaultdict(list)
     edge_info = {}
 
-    db_output = connection_to_db.execute(
-        text("SELECT roadID, roadSegment, roadName, distance, roadType FROM ROAD")
-    )
+    base_query = """
+        SELECT r.roadID, r.roadSegment, r.roadName, r.distance, r.roadType
+        FROM ROAD r
+    """
+
+    params: dict[str, object] = {}
+    if owner_id is not None:
+        base_query += """
+        WHERE EXISTS (
+            SELECT 1
+            FROM CONNECTS_TO ct
+            JOIN CELL c ON c.locationID = ct.locationID
+            WHERE ct.roadID = r.roadID
+              AND c.createdBy = :owner_id
+        )
+        """
+        params["owner_id"] = owner_id
+
+    db_output = connection_to_db.execute(text(base_query), params)
     rows = db_output.fetchall()
 
     for roadID, roadSegment, roadName, distance, roadType in rows:
