@@ -6,25 +6,6 @@ Authors: Jason Duong, Yahya Asmara, Abdulrahman Negmeldin
 """
 
 """
-How to connect to DB:
-- db_engine = create_engine(DATABASE_URL) #DATABASE_URL is kept that way. It is an environment variable in Render with the DB key
-- connection_to_db = db_engine.connect() #Connect to the engine to begin inserting commands into the DB
-
-How to execute commands with the DB:
-- connection_to_db.execute(text("INSERT SQL COMMAND")) #Execute SQL commands. NOTE THAT THIS WILL BE CODED IN DETAIL LATER ONCE THE DB IS SET UP
-
-Grab results from the DB:
-- db_output = connection_to_db.execute(text("INSERT SQL COMMAND"))
-- db_output.fetchall() #Grab the results of an SQL command, if the command was meant to bring something back (ex. SELECT)
-
-How to save changes made to the DB:
-- connection_to_db.commit() #Without this line, any command executed against the DB will not save after the session ends
-
-How to clean up the DB after use:
-- connection_to_db.close()
-"""
-
-"""
 Used in the context of Render. Allows this file to connect to the database via a URL and allows it to access a secret key.
 """
 import os
@@ -138,11 +119,6 @@ __name__ denotes the current file, value varies by whether this file is imported
 webApp = Flask(__name__)
 webApp.secret_key = SECRET_KEY # Sets the secret key for flask to the one stored on Render
 CORS(webApp, resources={r"/*": {"origins": "*"}})
-
-"""
-Creates a LoginManager instance and initializes it.
-TODO: Determine how login will work with react
-"""
 
 
 #--Authentication API--
