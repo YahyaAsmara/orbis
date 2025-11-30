@@ -828,7 +828,7 @@ def fetch_locations(connection, user_id: int):
 """
 Fetch all roads and their related information
 """
-def fetch_roads(connection):
+def fetch_roads(connection, owner_id: Optional[int] = None):
     #select rows with all information related to the road
     rows = connection.execute(
         text(
@@ -847,9 +847,11 @@ def fetch_roads(connection):
             LEFT JOIN CONNECTS_TO ct ON ct.roadID = r.roadID
             LEFT JOIN CELL c ON c.locationID = ct.locationID
             LEFT JOIN USERS u ON u.userID = c.createdBy
+            WHERE (:owner_id IS NULL OR c.createdBy = :owner_id)
             ORDER BY r.roadID
             """
-        )
+        ),
+        {"owner_id": owner_id},
     ).mappings().all()
 
     roads = {}
@@ -1149,7 +1151,7 @@ def getGraph(user_id):
     try:
         with get_db_connection() as connection:
             locations = fetch_locations(connection, user_id)
-            roads = fetch_roads(connection)
+            roads = fetch_roads(connection, user_id)
         return jsonify({"locations": locations, "roads": roads}), 200
     except (ValueError, SQLAlchemyError) as exc:
         print("Error loading graph", exc)
@@ -1846,7 +1848,7 @@ def computePath(user_id):
 
     try:
         with get_db_connection() as connection:
-            adjacency, _ = build_road_graph(connection)
+            adjacency, _ = build_road_graph(connection, user_id)
 
         path, total_distance = aStarSearch(user_id, start, end, pit_stops, adjacency)
         if path is None:
@@ -2030,7 +2032,7 @@ def getProfileData(user_id):
 
             locations = fetch_locations(connection, user_id)
             routes = fetch_saved_routes(connection, user_id)
-            roads = fetch_roads(connection)
+            roads = fetch_roads(connection, user_id)
 
         user_payload = {
             "userID": user_row["userID"],
@@ -2453,13 +2455,29 @@ def normalize_coord(coord):
 """
 Function to build the road 
 """
-def build_road_graph(connection_to_db):
+def build_road_graph(connection_to_db, owner_id: Optional[int] = None):
     adjacency = defaultdict(list)
     edge_info = {}
 
-    db_output = connection_to_db.execute(
-        text("SELECT roadID, roadSegment, roadName, distance, roadType FROM ROAD")
-    )
+    base_query = """
+        SELECT r.roadID, r.roadSegment, r.roadName, r.distance, r.roadType
+        FROM ROAD r
+    """
+
+    params: dict[str, object] = {}
+    if owner_id is not None:
+        base_query += """
+        WHERE EXISTS (
+            SELECT 1
+            FROM CONNECTS_TO ct
+            JOIN CELL c ON c.locationID = ct.locationID
+            WHERE ct.roadID = r.roadID
+              AND c.createdBy = :owner_id
+        )
+        """
+        params["owner_id"] = owner_id
+
+    db_output = connection_to_db.execute(text(base_query), params)
     rows = db_output.fetchall()
 
     for roadID, roadSegment, roadName, distance, roadType in rows:
