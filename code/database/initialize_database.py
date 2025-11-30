@@ -27,12 +27,6 @@ connection_to_db.execute(text(open("database_configurations.sql", "r").read())) 
 
 print("Initialization Successful")
 
-"""
-NOTE: Paste following line if you want to make changes to the DB
--> connection_to_db.commit() # Commit the changes above 
-NOTE: The file will, by default, make NO changes to the DB, even if you try to (ex. dropping tables)
-"""
-
 while True: #While loop. Interact with the DB after initialization
     userInput = input() #Get user input 
     if userInput == "exit": break
@@ -43,4 +37,9 @@ while True: #While loop. Interact with the DB after initialization
     except:
         print("Command Successful")
 
+"""
+NOTE: Paste following line if you want to make changes to the DB
+-> connection_to_db.commit() # Commit the changes above 
+NOTE: The file will, by default, make NO changes to the DB, even if you try to (ex. dropping tables)
+"""
 connection_to_db.close() # Teardown stuff

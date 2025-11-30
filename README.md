@@ -6,6 +6,8 @@ A web-based navigation system for fictional worlds, inspired by Google Maps but 
 
 Orbis allows users to create custom locations, landmarks, and road networks within an imaginary world, then calculate optimal routes between destinations based on time of day, transport mode, and desired pit stops.
 
+Access the project from the link: https://cpsc-471-final-project-1.onrender.com/
+
 ## Key Features
 
 - **User Accounts**: Personalized profiles with custom map extensions
