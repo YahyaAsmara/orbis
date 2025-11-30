@@ -124,6 +124,8 @@ CORS(webApp, resources={r"/*": {"origins": "*"}})
 #--Authentication API--
 """
 Helper function to hash passwords for security purposes
+
+# ==== Authentication helpers and session utilities ====
 """
 def hash_password(pwd):
     salt = bcrypt.gensalt()
@@ -405,7 +407,7 @@ def signIn():
         }), 500
 #----------------------
 
-#--API Methods for Frontend--
+# ==== API Methods for Frontend (locations, roads, routes) ====
 
 """
 Convert various point formats into [x, y] float pair 
@@ -618,7 +620,7 @@ except SQLAlchemyError as exc:
     print("Warning: unable to bootstrap reference data", exc)
 
 
-#----Road related functions----
+# ---- Location and road helper functions ----
 
 
 def currency_exists(connection, currency_name: Optional[str]) -> bool:
@@ -1044,7 +1046,7 @@ def prune_auto_roads_for_user(connection, user_id: int) -> int:
     return removed
 
 
-#----Deletion related functions---
+# ---- Deletion utilities for user-owned data ----
 
 """
 Delete a single location entry and its associated routes 
@@ -1132,6 +1134,8 @@ def getGraph(user_id):
     except (ValueError, SQLAlchemyError) as exc:
         print("Error loading graph", exc)
         return jsonify({"message": "Failed to load user graph"}), 500
+
+# ==== Location CRUD endpoints ====
 
 """
 Updates a specified user's graph with a location
@@ -1277,6 +1281,8 @@ def updateLocation(user_id):
         print("Error updating location", exc)
         return jsonify({"message": "Unable to update location"}), 500
 
+
+# ==== Currency reference endpoints ====
 
 @webApp.route("/reference/currencies", methods=["GET"])
 @require_auth()
@@ -1449,6 +1455,8 @@ def get_vehicle_reference():
         return jsonify({"message": "Unable to load vehicles"}), 500
 
 
+# ==== Vehicle inventory endpoints ====
+
 @webApp.route("/<int:user_id>/vehicles", methods=["GET"])
 @require_auth(enforce_user_match=True)
 def list_user_vehicles(user_id):
@@ -1615,6 +1623,8 @@ def update_location_currencies(user_id, location_id):
         print("Error updating location currencies", exc)
         return jsonify({"message": "Unable to update location currencies"}), 500
 
+
+# ==== Landmark management endpoints ====
 
 @webApp.route("/<int:user_id>/landmarks", methods=["GET"])
 @require_auth(enforce_user_match=True)
@@ -1784,6 +1794,8 @@ def delete_landmark(user_id):
         print("Error deleting landmark", exc)
         return jsonify({"message": "Unable to delete landmark"}), 500
 
+# ==== Route storage and planning endpoints ====
+
 @webApp.route("/<int:user_id>/removeSavedPath", methods=["POST"])
 @require_auth(enforce_user_match=True)
 def removeSavedPath(user_id):
@@ -1824,7 +1836,7 @@ def computePath(user_id):
 
     try:
         with get_db_connection() as connection:
-            adjacency, _ = build_road_graph(connection, user_id)
+            adjacency = build_road_graph(connection, user_id)
 
         path, total_distance = aStarSearch(user_id, start, end, pit_stops, adjacency)
         if path is None:
@@ -1982,6 +1994,8 @@ def update_road_status(road_id):
         print("Error updating road status", exc)
         return jsonify({"message": "Unable to update road"}), 500
 
+# ==== Profile data and account lifecycle ====
+
 @webApp.route("/<int:user_id>/", methods=["GET"])
 @require_auth(enforce_user_match=True)
 def getProfileData(user_id):
@@ -2040,7 +2054,7 @@ def delete_account(user_id):
         return jsonify({"message": "Unable to delete account"}), 500
 #----------------------------
 
-#--Admin analytics--
+# ==== Admin analytics and management endpoints ====
 @webApp.route("/admin/overview", methods=["GET"])
 @require_auth(required_role="admin")
 def get_admin_overview():
@@ -2433,7 +2447,6 @@ Function to build the road
 """
 def build_road_graph(connection_to_db, owner_id: Optional[int] = None):
     adjacency = defaultdict(list)
-    edge_info = {}
 
     base_query = """
         SELECT r.roadID, r.roadSegment, r.roadName, r.distance, r.roadType
@@ -2470,15 +2483,7 @@ def build_road_graph(connection_to_db, owner_id: Optional[int] = None):
         adjacency[p1].append((p2, weight))
         adjacency[p2].append((p1, weight))
 
-        key = (p1, p2) if p1 <= p2 else (p2, p1)
-        edge_info[key] = {
-            "roadID": roadID,
-            "roadName": roadName,
-            "distance": weight,
-            "roadType": roadType,
-        }
-
-    return adjacency, edge_info
+    return adjacency
 
 """
 The heuristic used in A* pathfinding is Chebyshev 
