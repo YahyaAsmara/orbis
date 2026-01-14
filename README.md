@@ -38,7 +38,7 @@ root/
 - **Database**: PostgreSQL
 - **Architecture**: Single Page Application (SPA) with RESTful API
 
-## Admin Access & Account Management
+## Admin Access & Account Management (please email Team for use)
 
 - The first administrator must be promoted manually in the database. Use the helper REPL so the SQL actually executes against PostgreSQL:
 
