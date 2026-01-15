@@ -8,6 +8,8 @@ Orbis allows users to create custom locations, landmarks, and road networks with
 
 Access the project from the link: https://cpsc-471-final-project-1.onrender.com/
 
+**Please note that the database may take some time to wake up when you're creating an account. Thanks for your patience.**
+
 ## Key Features
 
 - **User Accounts**: Personalized profiles with custom map extensions
